@@ -72,9 +72,22 @@ interface BackupTransaction extends Omit<Transaction, "id"> {
 }
 
 // Type for backup stock item data
-interface BackupStockItem extends Omit<StockItem, "id"> {
+interface Cylinder {
+  serialNumber: string
+  capacity: number
+  lastInspectionDate: string
+  nextInspectionDate: string
+  status: "in_stock" | "in_use" | "out_of_service"
+}
+
+interface BackupStockItem {
   id?: string
-  [key: string]: string | number | boolean | undefined
+  gasType: string
+  price: number
+  stock: number
+  lastUpdated: string
+  cylinders: Cylinder[] // Make this required to match StockItem
+  [key: string]: string | number | boolean | undefined | Cylinder[] // Include Cylinder[] in index signature
 }
 
 interface AppSettingsContextType {
