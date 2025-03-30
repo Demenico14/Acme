@@ -30,7 +30,7 @@ import { StockHistory } from "@/components/stock/stock-history"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { CylinderManager } from "@/components/stock/cylinder-manager"
+import CylinderManager  from "@/components/stock/cylinder-manager"
 
 export default function StockPage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([])
