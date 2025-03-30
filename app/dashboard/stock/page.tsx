@@ -4,11 +4,13 @@ import type React from "react"
 
 import { useEffect, useState, useCallback } from "react"
 import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc } from "firebase/firestore"
-import { Package, Plus, Edit, Trash2 } from "lucide-react"
+import { Package, Plus, Edit, Trash2, Filter, History, Zap } from "lucide-react"
 
 import { db } from "@/lib/firebase"
-import type { StockItem } from "@/types"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { setupAutomatedConsumptionTracking } from "@/lib/automated-consumption-service"
+import { useAuth } from "@/context/auth-context"
+import type { StockItem, Cylinder } from "@/types"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -23,28 +25,45 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
+import { GasConsumptionGraph } from "@/components/stock/gas-consumption-graph"
+import { StockHistory } from "@/components/stock/stock-history"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Badge } from "@/components/ui/badge"
+import { CylinderManager } from "@/components/stock/cylinder-manager"
 
 export default function StockPage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isCylinderDialogOpen, setIsCylinderDialogOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<StockItem | null>(null)
   const [formData, setFormData] = useState({
     gasType: "",
     price: "",
-    stock: "",
   })
+  const [selectedGasType, setSelectedGasType] = useState<string | undefined>(undefined)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [automationStatus, setAutomationStatus] = useState<"active" | "inactive">("inactive")
   const { toast } = useToast()
+  const { user } = useAuth()
 
   const fetchStockItems = useCallback(async () => {
     try {
       setLoading(true)
       const stockSnapshot = await getDocs(collection(db, "stock"))
-      const stockData = stockSnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as StockItem[]
+      const stockData = stockSnapshot.docs.map((doc) => {
+        const data = doc.data()
+        // Ensure cylinders array exists
+        if (!data.cylinders) {
+          data.cylinders = []
+        }
+        return {
+          id: doc.id,
+          ...data,
+        }
+      }) as StockItem[]
       setStockItems(stockData)
     } catch (error) {
       console.error("Error fetching stock items:", error)
@@ -58,11 +77,28 @@ export default function StockPage() {
     }
   }, [toast])
 
+  // Set up automated consumption tracking
+  useEffect(() => {
+    const unsubscribe = setupAutomatedConsumptionTracking()
+    setAutomationStatus("active")
+
+    // Show toast notification that automation is active
+    toast({
+      title: "Automation Active",
+      description: "Gas consumption is being tracked automatically",
+    })
+
+    return () => {
+      unsubscribe()
+      setAutomationStatus("inactive")
+    }
+  }, [toast])
+
   useEffect(() => {
     fetchStockItems()
   }, [fetchStockItems])
 
-  function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleInputChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const { name, value } = e.target
     setFormData((prev) => ({ ...prev, [name]: value }))
   }
@@ -73,10 +109,26 @@ export default function StockPage() {
       const newItem = {
         gasType: formData.gasType,
         price: Number.parseFloat(formData.price),
-        stock: Number.parseFloat(formData.stock),
+        stock: 0, // Will be calculated from cylinders
+        lastUpdated: new Date().toISOString(),
+        cylinders: [], // Start with no cylinders
       }
 
-      await addDoc(collection(db, "stock"), newItem)
+      const docRef = await addDoc(collection(db, "stock"), newItem)
+
+      // Record initial stock history
+      if (user) {
+        await addDoc(collection(db, "stockHistory"), {
+          gasType: newItem.gasType,
+          timestamp: new Date().toISOString(),
+          previousStock: 0,
+          newStock: 0,
+          changeAmount: 0,
+          reason: "Initial stock",
+          userId: user.uid,
+          userName: user.displayName || user.email,
+        })
+      }
 
       toast({
         title: "Success",
@@ -84,8 +136,22 @@ export default function StockPage() {
       })
 
       setIsAddDialogOpen(false)
-      setFormData({ gasType: "", price: "", stock: "" })
+      setFormData({ gasType: "", price: "" })
+
+      // Open cylinder dialog to add cylinders
+      const newStockItem = {
+        id: docRef.id,
+        gasType: formData.gasType,
+        price: Number.parseFloat(formData.price),
+        stock: 0,
+        lastUpdated: new Date().toISOString(),
+        cylinders: [],
+      }
+      setCurrentItem(newStockItem)
+      setIsCylinderDialogOpen(true)
+
       fetchStockItems()
+      setRefreshTrigger((prev) => prev + 1)
     } catch (error) {
       console.error("Error adding stock item:", error)
       toast({
@@ -101,23 +167,26 @@ export default function StockPage() {
     setFormData({
       gasType: item.gasType,
       price: item.price.toString(),
-      stock: item.stock.toString(),
     })
     setIsEditDialogOpen(true)
   }
 
+  function handleManageCylinders(item: StockItem) {
+    setCurrentItem(item)
+    setIsCylinderDialogOpen(true)
+  }
+
   async function handleUpdateItem(e: React.FormEvent) {
     e.preventDefault()
-    if (!currentItem) return
+    if (!currentItem || !user) return
 
     try {
-      const updatedItem = {
+      // Update fields directly
+      await updateDoc(doc(db, "stock", currentItem.id), {
         gasType: formData.gasType,
         price: Number.parseFloat(formData.price),
-        stock: Number.parseFloat(formData.stock),
-      }
-
-      await updateDoc(doc(db, "stock", currentItem.id), updatedItem)
+        lastUpdated: new Date().toISOString(),
+      })
 
       toast({
         title: "Success",
@@ -126,13 +195,65 @@ export default function StockPage() {
 
       setIsEditDialogOpen(false)
       setCurrentItem(null)
-      setFormData({ gasType: "", price: "", stock: "" })
+      setFormData({ gasType: "", price: "" })
       fetchStockItems()
+      setRefreshTrigger((prev) => prev + 1)
     } catch (error) {
       console.error("Error updating stock item:", error)
       toast({
         title: "Error",
         description: "Failed to update stock item",
+        variant: "destructive",
+      })
+    }
+  }
+
+  async function handleUpdateCylinders(cylinders: Cylinder[]) {
+    if (!currentItem || !user) return
+
+    try {
+      // Calculate total stock from cylinders
+      const totalStock = cylinders.reduce((total, cylinder) => {
+        return total + cylinder.size * cylinder.count
+      }, 0)
+
+      // Get previous stock for history
+      const previousStock = currentItem.stock
+
+      // Update stock item with new cylinders and calculated stock
+      await updateDoc(doc(db, "stock", currentItem.id), {
+        cylinders,
+        stock: totalStock,
+        lastUpdated: new Date().toISOString(),
+      })
+
+      // Record stock history if stock changed
+      if (totalStock !== previousStock) {
+        await addDoc(collection(db, "stockHistory"), {
+          gasType: currentItem.gasType,
+          timestamp: new Date().toISOString(),
+          previousStock,
+          newStock: totalStock,
+          changeAmount: totalStock - previousStock,
+          reason: totalStock > previousStock ? "Cylinders added" : "Cylinders removed",
+          userId: user.uid,
+          userName: user.displayName || user.email,
+          isRestock: totalStock > previousStock,
+        })
+      }
+
+      toast({
+        title: "Success",
+        description: "Cylinders updated successfully",
+      })
+
+      fetchStockItems()
+      setRefreshTrigger((prev) => prev + 1)
+    } catch (error) {
+      console.error("Error updating cylinders:", error)
+      toast({
+        title: "Error",
+        description: "Failed to update cylinders",
         variant: "destructive",
       })
     }
@@ -149,6 +270,7 @@ export default function StockPage() {
         })
 
         fetchStockItems()
+        setRefreshTrigger((prev) => prev + 1)
       } catch (error) {
         console.error("Error deleting stock item:", error)
         toast({
@@ -164,158 +286,301 @@ export default function StockPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold tracking-tight">Stock Management</h2>
-        <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Add New Item
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add New Stock Item</DialogTitle>
-              <DialogDescription>Enter the details for the new stock item.</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleAddItem}>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="gasType">Gas Type</Label>
-                  <Input id="gasType" name="gasType" value={formData.gasType} onChange={handleInputChange} required />
+        <div className="flex items-center gap-2">
+          <Badge
+            variant={automationStatus === "active" ? "default" : "outline"}
+            className={automationStatus === "active" ? "bg-green-500" : ""}
+          >
+            <Zap className="mr-1 h-3 w-3" />
+            Automated Tracking {automationStatus === "active" ? "Active" : "Inactive"}
+          </Badge>
+          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add New Gas Type
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add New Gas Type</DialogTitle>
+                <DialogDescription>Enter the details for the new gas type.</DialogDescription>
+              </DialogHeader>
+              <form onSubmit={handleAddItem}>
+                <div className="grid gap-4 py-4">
+                  <div className="grid gap-2">
+                    <Label htmlFor="gasType">Gas Type</Label>
+                    <Input id="gasType" name="gasType" value={formData.gasType} onChange={handleInputChange} required />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="price">Price per kg</Label>
+                    <Input
+                      id="price"
+                      name="price"
+                      type="number"
+                      step="0.01"
+                      value={formData.price}
+                      onChange={handleInputChange}
+                      required
+                    />
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="price">Price</Label>
-                  <Input
-                    id="price"
-                    name="price"
-                    type="number"
-                    step="0.01"
-                    value={formData.price}
-                    onChange={handleInputChange}
-                    required
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="stock">Stock Quantity</Label>
-                  <Input
-                    id="stock"
-                    name="stock"
-                    type="number"
-                    step="0.01"
-                    value={formData.stock}
-                    onChange={handleInputChange}
-                    required
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="submit">Add Item</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
-
-        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Edit Stock Item</DialogTitle>
-              <DialogDescription>Update the details for this stock item.</DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleUpdateItem}>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-gasType">Gas Type</Label>
-                  <Input
-                    id="edit-gasType"
-                    name="gasType"
-                    value={formData.gasType}
-                    onChange={handleInputChange}
-                    required
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-price">Price</Label>
-                  <Input
-                    id="edit-price"
-                    name="price"
-                    type="number"
-                    step="0.01"
-                    value={formData.price}
-                    onChange={handleInputChange}
-                    required
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-stock">Stock Quantity</Label>
-                  <Input
-                    id="edit-stock"
-                    name="stock"
-                    type="number"
-                    step="0.01"
-                    value={formData.stock}
-                    onChange={handleInputChange}
-                    required
-                  />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button type="submit">Update Item</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+                <DialogFooter>
+                  <Button type="submit">Add Gas Type</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
-      <Card>
+      <Card className="bg-muted/40">
         <CardHeader>
-          <CardTitle>Stock Inventory</CardTitle>
-          <CardDescription>Manage your gas inventory</CardDescription>
+          <CardTitle>Cylinder-Based Stock Management</CardTitle>
+          <CardDescription>Track your gas inventory by managing individual cylinders</CardDescription>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="flex justify-center py-8">
-              <p>Loading stock items...</p>
-            </div>
-          ) : stockItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8">
-              <Package className="h-12 w-12 text-muted-foreground" />
-              <h3 className="mt-4 text-lg font-medium">No stock items found</h3>
-              <p className="text-sm text-muted-foreground">Add your first stock item to get started.</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Gas Type</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Stock Quantity</TableHead>
-
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {stockItems.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium">{item.gasType}</TableCell>
-                    <TableCell>${item.price.toFixed(2)}</TableCell>
-                    <TableCell>{item.stock.toFixed(2)}</TableCell>
-
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="icon" onClick={() => handleEditClick(item)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="icon" onClick={() => handleDeleteItem(item.id)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <p>
+            The system now tracks individual cylinders for each gas type. Add different cylinder sizes and quantities to
+            accurately manage your inventory. Stock levels are automatically calculated based on the total volume of all
+            cylinders.
+          </p>
         </CardContent>
+        <CardFooter className="text-sm text-muted-foreground">
+          Consumption is automatically tracked when cylinder counts change
+        </CardFooter>
       </Card>
+
+      <Tabs defaultValue="inventory" className="w-full">
+        <TabsList>
+          <TabsTrigger value="inventory">Inventory</TabsTrigger>
+          <TabsTrigger value="consumption">Consumption Analytics</TabsTrigger>
+          <TabsTrigger value="history">Stock History</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="inventory">
+          <Card>
+            <CardHeader>
+              <CardTitle>Gas Inventory</CardTitle>
+              <CardDescription>Manage your gas inventory by cylinder</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex justify-center py-8">
+                  <p>Loading stock items...</p>
+                </div>
+              ) : stockItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-8">
+                  <Package className="h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-medium">No stock items found</h3>
+                  <p className="text-sm text-muted-foreground">Add your first gas type to get started.</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Gas Type</TableHead>
+                      <TableHead>Price per kg</TableHead>
+                      <TableHead>Total Cylinders</TableHead>
+                      <TableHead>Total Stock (kg)</TableHead>
+                      <TableHead>Last Updated</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {stockItems.map((item) => (
+                      <TableRow key={item.id}>
+                        <TableCell className="font-medium">{item.gasType}</TableCell>
+                        <TableCell>${item.price.toFixed(2)}</TableCell>
+                        <TableCell>
+                          {item.cylinders?.reduce((total, cylinder) => total + cylinder.count, 0) || 0}
+                        </TableCell>
+                        <TableCell>{item.stock.toFixed(2)} kg</TableCell>
+                        <TableCell>{new Date(item.lastUpdated).toLocaleString()}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleManageCylinders(item)}
+                              className="flex items-center gap-1"
+                            >
+                              <Package className="h-4 w-4" />
+                              Manage Cylinders
+                            </Button>
+                            <Button variant="outline" size="icon" onClick={() => handleEditClick(item)}>
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button variant="outline" size="icon" onClick={() => handleDeleteItem(item.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="consumption">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-medium">Gas Consumption Analytics</h3>
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-muted-foreground" />
+              <Select
+                value={selectedGasType || "all"}
+                onValueChange={(value) => setSelectedGasType(value || undefined)}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Filter by gas type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Gas Types</SelectItem>
+                  {stockItems.map((item) => (
+                    <SelectItem key={item.id} value={item.gasType}>
+                      {item.gasType}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <GasConsumptionGraph gasType={selectedGasType} refreshTrigger={refreshTrigger} showRestockEvents={true} />
+
+          <div className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Cylinder Inventory</CardTitle>
+                <CardDescription>Current cylinder inventory by gas type</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  {stockItems.map((item) => (
+                    <div key={item.id} className="space-y-2">
+                      <h3 className="font-medium">{item.gasType}</h3>
+                      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        {item.cylinders && item.cylinders.length > 0 ? (
+                          item.cylinders.map((cylinder) => (
+                            <div key={cylinder.id} className="rounded-lg border p-3">
+                              <div className="text-sm font-medium">{cylinder.size} kg Cylinder</div>
+                              <div className="mt-1 text-xl font-bold">{cylinder.count} units</div>
+                              <div className="text-xs text-muted-foreground">
+                                Total: {(cylinder.size * cylinder.count).toFixed(2)} kg
+                              </div>
+                              {cylinder.lastRestocked && (
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                  Last restocked: {new Date(cylinder.lastRestocked).toLocaleDateString()}
+                                </div>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="col-span-full text-sm text-muted-foreground">
+                            No cylinders added for this gas type
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="history">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-medium">Stock History</h3>
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-muted-foreground" />
+              <Select
+                value={selectedGasType || "all"}
+                onValueChange={(value) => setSelectedGasType(value || undefined)}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Filter by gas type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Gas Types</SelectItem>
+                  {stockItems.map((item) => (
+                    <SelectItem key={item.id} value={item.gasType}>
+                      {item.gasType}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <StockHistory gasType={selectedGasType} showRestockEvents={true} />
+        </TabsContent>
+      </Tabs>
+
+      {/* Cylinder Management Dialog */}
+      <Dialog open={isCylinderDialogOpen} onOpenChange={setIsCylinderDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Manage Cylinders</DialogTitle>
+            <DialogDescription>
+              {currentItem ? `Manage cylinders for ${currentItem.gasType}` : "Manage your gas cylinders"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {currentItem && (
+            <CylinderManager
+              cylinders={currentItem.cylinders || []}
+              onUpdate={(cylinders) => handleUpdateCylinders(cylinders)}
+            />
+          )}
+
+          <DialogFooter>
+            <Button onClick={() => setIsCylinderDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Gas Type</DialogTitle>
+            <DialogDescription>Update the details for this gas type.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleUpdateItem}>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-gasType">Gas Type</Label>
+                <Input
+                  id="edit-gasType"
+                  name="gasType"
+                  value={formData.gasType}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-price">Price per kg</Label>
+                <Input
+                  id="edit-price"
+                  name="price"
+                  type="number"
+                  step="0.01"
+                  value={formData.price}
+                  onChange={handleInputChange}
+                  required
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="submit">Update Gas Type</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

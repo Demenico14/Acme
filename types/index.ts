@@ -4,6 +4,7 @@ export interface StockItem {
   price: number
   stock: number
   lastUpdated: string
+  cylinders: Cylinder[] // Add cylinders array to StockItem
 }
 
 export interface StockAttachment {
@@ -65,5 +66,22 @@ export interface NewUserData {
   profileImageUrl?: string
   status: "active" | "inactive" | "pending"
   notes?: string
+}
+
+// Update the Cylinder interface to fix the remaining errors
+export interface Cylinder {
+  id: string
+  serialNumber: string
+  capacity: number
+  manufacturer: string
+  manufactureDate: string
+  lastInspectionDate: string
+  nextInspectionDate: string
+  status: "available" | "in-use" | "maintenance" | "retired"
+  location: string
+  notes?: string
+  size: number // Changed from string to number for arithmetic operations
+  count: number
+  lastRestocked: string // Added lastRestocked property
 }
 
