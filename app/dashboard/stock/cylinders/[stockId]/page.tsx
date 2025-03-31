@@ -18,8 +18,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/context/auth-context"
 
-export default function CylinderManagementPage({ params }: { params: { stockId: string } }) {
-  const { stockId } = params
+type Props = {
+    params: { stockId: string }
+    searchParams?: { [key: string]: string | string[] | undefined }
+  }
+
+export default function CylinderManagementPage({ params }: Props) {
+    const { stockId } = params
   const router = useRouter()
   const { toast } = useToast()
   const { user } = useAuth()
