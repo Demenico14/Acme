@@ -332,7 +332,7 @@ export function GasConsumptionGraph({
                           strokeWidth={2}
                           strokeDasharray="3 3"
                           label={{
-                            value: "Restock",
+                            value: `+${entry.restockAmount?.toFixed(1)}kg`,
                             position: "top",
                             fill: "#10b981",
                             fontSize: 12,

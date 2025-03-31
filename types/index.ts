@@ -7,6 +7,7 @@ export interface StockItem {
   cylinders: Cylinder[] // Add cylinders array to StockItem
 }
 
+// Update the StockAttachment interface to include the properties we're using
 export interface StockAttachment {
   id: string
   name: string
@@ -18,6 +19,9 @@ export interface StockAttachment {
   notes: string
   lastInspection: string
   nextInspection: string
+  // Optional properties that might be present
+  capacity?: number
+  manufacturer?: string
 }
 
 export interface Transaction {

@@ -1,15 +1,19 @@
 "use client"
 
+import { DialogTrigger } from "@/components/ui/dialog"
+
 import type React from "react"
 
 import { useEffect, useState, useCallback } from "react"
 import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc } from "firebase/firestore"
 import { Package, Plus, Edit, Trash2, Filter, History, Zap } from "lucide-react"
+import Link from "next/link"
+import { useRouter } from "next/navigation"
 
 import { db } from "@/lib/firebase"
 import { setupAutomatedConsumptionTracking } from "@/lib/automated-consumption-service"
 import { useAuth } from "@/context/auth-context"
-import type { StockItem, Cylinder } from "@/types"
+import type { StockItem } from "@/types"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -21,7 +25,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { useToast } from "@/hooks/use-toast"
@@ -30,14 +33,12 @@ import { StockHistory } from "@/components/stock/stock-history"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import CylinderManager  from "@/components/stock/cylinder-manager"
 
 export default function StockPage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
-  const [isCylinderDialogOpen, setIsCylinderDialogOpen] = useState(false)
   const [currentItem, setCurrentItem] = useState<StockItem | null>(null)
   const [formData, setFormData] = useState({
     gasType: "",
@@ -48,6 +49,7 @@ export default function StockPage() {
   const [automationStatus, setAutomationStatus] = useState<"active" | "inactive">("inactive")
   const { toast } = useToast()
   const { user } = useAuth()
+  const router = useRouter()
 
   const fetchStockItems = useCallback(async () => {
     try {
@@ -148,7 +150,7 @@ export default function StockPage() {
         cylinders: [],
       }
       setCurrentItem(newStockItem)
-      setIsCylinderDialogOpen(true)
+      router.push(`/dashboard/stock/cylinders/${docRef.id}`)
 
       fetchStockItems()
       setRefreshTrigger((prev) => prev + 1)
@@ -171,10 +173,6 @@ export default function StockPage() {
     setIsEditDialogOpen(true)
   }
 
-  function handleManageCylinders(item: StockItem) {
-    setCurrentItem(item)
-    setIsCylinderDialogOpen(true)
-  }
 
   async function handleUpdateItem(e: React.FormEvent) {
     e.preventDefault()
@@ -208,77 +206,24 @@ export default function StockPage() {
     }
   }
 
-  async function handleUpdateCylinders(cylinders: Cylinder[]) {
-    if (!currentItem || !user) return
 
-    try {
-      // Calculate total stock from cylinders
-      const totalStock = cylinders.reduce((total, cylinder) => {
-        return total + cylinder.size * cylinder.count
-      }, 0)
-
-      // Get previous stock for history
-      const previousStock = currentItem.stock
-
-      // Update stock item with new cylinders and calculated stock
-      await updateDoc(doc(db, "stock", currentItem.id), {
-        cylinders,
-        stock: totalStock,
-        lastUpdated: new Date().toISOString(),
-      })
-
-      // Record stock history if stock changed
-      if (totalStock !== previousStock) {
-        await addDoc(collection(db, "stockHistory"), {
-          gasType: currentItem.gasType,
-          timestamp: new Date().toISOString(),
-          previousStock,
-          newStock: totalStock,
-          changeAmount: totalStock - previousStock,
-          reason: totalStock > previousStock ? "Cylinders added" : "Cylinders removed",
-          userId: user.uid,
-          userName: user.displayName || user.email,
-          isRestock: totalStock > previousStock,
-        })
-      }
-
-      toast({
-        title: "Success",
-        description: "Cylinders updated successfully",
-      })
-
-      fetchStockItems()
-      setRefreshTrigger((prev) => prev + 1)
-    } catch (error) {
-      console.error("Error updating cylinders:", error)
-      toast({
-        title: "Error",
-        description: "Failed to update cylinders",
-        variant: "destructive",
-      })
-    }
-  }
+  // Add a new function to handle cylinder restocking after the handleUpdateCylinders function
 
   async function handleDeleteItem(id: string) {
-    if (confirm("Are you sure you want to delete this item?")) {
-      try {
-        await deleteDoc(doc(db, "stock", id))
-
-        toast({
-          title: "Success",
-          description: "Stock item deleted successfully",
-        })
-
-        fetchStockItems()
-        setRefreshTrigger((prev) => prev + 1)
-      } catch (error) {
-        console.error("Error deleting stock item:", error)
-        toast({
-          title: "Error",
-          description: "Failed to delete stock item",
-          variant: "destructive",
-        })
-      }
+    try {
+      await deleteDoc(doc(db, "stock", id))
+      toast({
+        title: "Success",
+        description: "Stock item deleted successfully",
+      })
+      fetchStockItems()
+    } catch (error) {
+      console.error("Error deleting stock item:", error)
+      toast({
+        title: "Error",
+        description: "Failed to delete stock item",
+        variant: "destructive",
+      })
     }
   }
 
@@ -399,14 +344,11 @@ export default function StockPage() {
                         <TableCell>{new Date(item.lastUpdated).toLocaleString()}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleManageCylinders(item)}
-                              className="flex items-center gap-1"
-                            >
-                              <Package className="h-4 w-4" />
-                              Manage Cylinders
+                            <Button variant="outline" size="sm" asChild className="flex items-center gap-1">
+                              <Link href={`/dashboard/stock/cylinders/${item.id}`}>
+                                <Package className="h-4 w-4" />
+                                Manage Cylinders
+                              </Link>
                             </Button>
                             <Button variant="outline" size="icon" onClick={() => handleEditClick(item)}>
                               <Edit className="h-4 w-4" />
@@ -519,29 +461,6 @@ export default function StockPage() {
           <StockHistory gasType={selectedGasType} showRestockEvents={true} />
         </TabsContent>
       </Tabs>
-
-      {/* Cylinder Management Dialog */}
-      <Dialog open={isCylinderDialogOpen} onOpenChange={setIsCylinderDialogOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Manage Cylinders</DialogTitle>
-            <DialogDescription>
-              {currentItem ? `Manage cylinders for ${currentItem.gasType}` : "Manage your gas cylinders"}
-            </DialogDescription>
-          </DialogHeader>
-
-          {currentItem && (
-            <CylinderManager
-              cylinders={currentItem.cylinders || []}
-              onUpdate={(cylinders) => handleUpdateCylinders(cylinders)}
-            />
-          )}
-
-          <DialogFooter>
-            <Button onClick={() => setIsCylinderDialogOpen(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>

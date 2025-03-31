@@ -36,6 +36,7 @@ interface StockAttachment {
   notes: string
   lastInspection: string
   nextInspection: string
+  capacity?: number
 }
 
 export default function StockAttachmentsPage() {
@@ -54,6 +55,7 @@ export default function StockAttachmentsPage() {
     notes: "",
     lastInspection: "",
     nextInspection: "",
+    capacity: 0,
   })
   const { toast } = useToast()
 
@@ -119,6 +121,7 @@ export default function StockAttachmentsPage() {
         notes: "",
         lastInspection: "",
         nextInspection: "",
+        capacity: 0,
       })
       fetchAttachments()
     } catch (error) {
@@ -143,6 +146,7 @@ export default function StockAttachmentsPage() {
       notes: attachment.notes,
       lastInspection: attachment.lastInspection,
       nextInspection: attachment.nextInspection,
+      capacity: attachment.capacity || 0,
     })
     setIsEditDialogOpen(true)
   }
@@ -178,6 +182,7 @@ export default function StockAttachmentsPage() {
         notes: "",
         lastInspection: "",
         nextInspection: "",
+        capacity: 0,
       })
       fetchAttachments()
     } catch (error) {
@@ -296,6 +301,22 @@ export default function StockAttachmentsPage() {
                     onChange={handleInputChange}
                   />
                 </div>
+
+                {formData.type === "cylinder" && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="capacity">Capacity (kg)</Label>
+                    <Input
+                      id="capacity"
+                      name="capacity"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={formData.capacity || ""}
+                      onChange={handleInputChange}
+                      required={formData.type === "cylinder"}
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
@@ -420,6 +441,22 @@ export default function StockAttachmentsPage() {
                     onChange={handleInputChange}
                   />
                 </div>
+
+                {formData.type === "cylinder" && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="capacity">Capacity (kg)</Label>
+                    <Input
+                      id="capacity"
+                      name="capacity"
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={formData.capacity || ""}
+                      onChange={handleInputChange}
+                      required={formData.type === "cylinder"}
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
