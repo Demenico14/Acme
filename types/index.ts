@@ -33,6 +33,8 @@ export interface Transaction {
   kgs: number
   paymentMethod: string
   total: number
+  reason?: string
+  isRestock?: boolean
 }
 
 export interface Address {

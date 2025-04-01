@@ -29,6 +29,7 @@ import {
   ChevronRight,
   ArrowDownLeft,
   Wallet,
+  RefreshCw,
 } from "lucide-react"
 
 import { db } from "@/lib/firebase"
@@ -288,7 +289,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Today&#39;s Revenue</CardTitle>
@@ -366,6 +367,37 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+        {/* Add a restock metrics card to the Summary Cards section
+        Add this after the "Low Stock Items" card */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Recent Restocks</CardTitle>
+            <RefreshCw className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {loading
+                ? "..."
+                : transactions
+                    .filter((t) => t.reason?.includes("restock") || t.isRestock)
+                    .reduce((sum, t) => sum + (t.kgs || 0), 0)
+                    .toFixed(2) + " kg"}
+            </div>
+            <div className="flex items-center pt-1">
+              <p className="text-xs text-muted-foreground">
+                {timeframe === "day"
+                  ? "in the last 24 hours"
+                  : timeframe === "week"
+                    ? "in the last 7 days"
+                    : timeframe === "month"
+                      ? "in the last 30 days"
+                      : timeframe === "quarter"
+                        ? "in the last 3 months"
+                        : "in the last year"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs defaultValue="overview" className="space-y-4">
@@ -373,7 +405,7 @@ export default function DashboardPage() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="sales">Sales Analytics</TabsTrigger>
           <TabsTrigger value="inventory">Inventory</TabsTrigger>
-          <TabsTrigger value="customers">Customers</TabsTrigger>
+          <TabsTrigger value="users">Users</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -613,6 +645,51 @@ export default function DashboardPage() {
                 )}
               </CardContent>
             </Card>
+            {/* Add a new section for recent restocks in the Overview tab
+            Add this after the "Recent Transactions" card in the overview tab */}
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Recent Restocks</CardTitle>
+                  <CardDescription>Latest restock activities</CardDescription>
+                </div>
+                <Link href="/dashboard/stock">
+                  <Button variant="ghost" size="sm" className="gap-1">
+                    View All
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </CardHeader>
+              <CardContent>
+                {loading ? (
+                  <div className="flex h-full items-center justify-center">
+                    <p>Loading data...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {transactions
+                      .filter((t) => t.reason?.includes("restock") || t.isRestock)
+                      .slice(0, 5)
+                      .map((restock) => (
+                        <div key={restock.id} className="flex items-center space-x-4">
+                          <Avatar className="h-9 w-9 bg-green-100">
+                            <AvatarFallback className="text-green-700">
+                              <RefreshCw className="h-4 w-4" />
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 space-y-1">
+                            <p className="text-sm font-medium leading-none">{restock.gasType || "Unknown Gas"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {restock.date ? new Date(restock.date).toLocaleString() : "Unknown time"}
+                            </p>
+                          </div>
+                          <div className="text-sm font-medium text-green-600">+{restock.kgs?.toFixed(2) || "0"} kg</div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
 
           {/* Key Metrics */}
@@ -717,7 +794,7 @@ export default function DashboardPage() {
               <CardContent className="h-80">
                 {loading ? (
                   <div className="flex h-full items-center justify-center">
-                    <p>Loading chart data...</p>
+                    <p>Loading data...</p>
                   </div>
                 ) : (
                   <div className="space-y-6">
@@ -883,7 +960,6 @@ export default function DashboardPage() {
               </CardFooter>
             </Card>
           </div>
-
           <Card>
             <CardHeader>
               <CardTitle>Inventory Details</CardTitle>
@@ -931,9 +1007,76 @@ export default function DashboardPage() {
               )}
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Recent Restock Activities</CardTitle>
+              <CardDescription>Latest cylinder restocks and inventory additions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex h-full items-center justify-center">
+                  <p>Loading data...</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {stockItems.map((item) => {
+                    // Filter transactions for restocks of this gas type
+                    const restocks = transactions
+                      .filter((t) => (t.reason?.includes("restock") || t.isRestock) && t.gasType === item.gasType)
+                      .slice(0, 3)
+
+                    return restocks.length > 0 ? (
+                      <div key={item.id} className="space-y-3">
+                        <h3 className="font-medium">{item.gasType}</h3>
+                        <div className="space-y-2">
+                          {restocks.map((restock) => (
+                            <div key={restock.id} className="flex items-center justify-between rounded-lg border p-3">
+                              <div className="flex items-center gap-3">
+                                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-100">
+                                  <RefreshCw className="h-4 w-4 text-green-700" />
+                                </div>
+                                <div>
+                                  <p className="text-sm font-medium">Restocked {restock.kgs?.toFixed(2) || "0"} kg</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {new Date(restock.date).toLocaleString()}
+                                  </p>
+                                </div>
+                              </div>
+                              <Badge variant="outline" className="bg-green-50 text-green-700">
+                                +{restock.kgs?.toFixed(2) || "0"} kg
+                              </Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null
+                  })}
+
+                  {!stockItems.some((item) =>
+                    transactions.some(
+                      (t) => (t.reason?.includes("restock") || t.isRestock) && t.gasType === item.gasType,
+                    ),
+                  ) && (
+                    <div className="flex flex-col items-center justify-center py-8 text-center">
+                      <RefreshCw className="h-12 w-12 text-muted-foreground" />
+                      <h3 className="mt-4 text-lg font-medium">No recent restocks</h3>
+                      <p className="text-sm text-muted-foreground">Restock your inventory to see activity here</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+            <CardFooter>
+              <Link href="/dashboard/stock" className="w-full">
+                <Button variant="outline" size="sm" className="w-full">
+                  Manage Inventory
+                </Button>
+              </Link>
+            </CardFooter>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="customers" className="space-y-4">
+        <TabsContent value="users" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>User Management</CardTitle>
