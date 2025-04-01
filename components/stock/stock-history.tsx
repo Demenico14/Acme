@@ -3,12 +3,16 @@
 import { useState, useEffect } from "react"
 import { collection, query, orderBy, getDocs, where } from "firebase/firestore"
 import { format, parseISO } from "date-fns"
-import { ArrowUp, ArrowDown, Zap, User, RefreshCw, Package } from "lucide-react"
+import { ArrowUp, ArrowDown, Zap, User, RefreshCw, Package, ChevronLeft, ChevronRight } from "lucide-react"
 
 import { db } from "@/lib/firebase"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+
+// Add pagination constants
+const ITEMS_PER_PAGE = 20
 
 interface StockHistoryEntry {
   id: string
@@ -32,6 +36,9 @@ interface StockHistoryProps {
 export function StockHistory({ gasType }: StockHistoryProps) {
   const [history, setHistory] = useState<StockHistoryEntry[]>([])
   const [loading, setLoading] = useState(true)
+  // Add pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
 
   useEffect(() => {
     async function fetchStockHistory() {
@@ -57,6 +64,10 @@ export function StockHistory({ gasType }: StockHistoryProps) {
         })) as StockHistoryEntry[]
 
         setHistory(historyData)
+        // Calculate total pages
+        setTotalPages(Math.ceil(historyData.length / ITEMS_PER_PAGE))
+        // Reset to first page when data changes
+        setCurrentPage(1)
       } catch (error) {
         console.error("Error fetching stock history:", error)
       } finally {
@@ -66,6 +77,25 @@ export function StockHistory({ gasType }: StockHistoryProps) {
 
     fetchStockHistory()
   }, [gasType])
+
+  // Get current page items
+  const getCurrentPageItems = () => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
+    return history.slice(startIndex, startIndex + ITEMS_PER_PAGE)
+  }
+
+  // Handle page navigation
+  const goToNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1)
+    }
+  }
+
+  const goToPreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1)
+    }
+  }
 
   return (
     <Card>
@@ -99,7 +129,7 @@ export function StockHistory({ gasType }: StockHistoryProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {history.map((entry) => (
+              {getCurrentPageItems().map((entry) => (
                 <TableRow key={entry.id} className={entry.isRestock ? "bg-green-50 dark:bg-green-900/10" : ""}>
                   <TableCell>{format(parseISO(entry.timestamp), "MMM dd, yyyy HH:mm")}</TableCell>
                   <TableCell>{entry.gasType}</TableCell>
@@ -148,6 +178,40 @@ export function StockHistory({ gasType }: StockHistoryProps) {
           </Table>
         )}
       </CardContent>
+      {/* Add pagination controls */}
+      {history.length > 0 && (
+        <CardFooter className="flex items-center justify-between border-t px-6 py-4">
+          <div className="text-sm text-muted-foreground">
+            Showing {Math.min(history.length, (currentPage - 1) * ITEMS_PER_PAGE + 1)} to{" "}
+            {Math.min(history.length, currentPage * ITEMS_PER_PAGE)} of {history.length} entries
+          </div>
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToPreviousPage}
+              disabled={currentPage === 1}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="sr-only">Previous page</span>
+            </Button>
+            <div className="text-sm">
+              Page {currentPage} of {totalPages}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={goToNextPage}
+              disabled={currentPage === totalPages}
+              className="h-8 w-8 p-0"
+            >
+              <ChevronRight className="h-4 w-4" />
+              <span className="sr-only">Next page</span>
+            </Button>
+          </div>
+        </CardFooter>
+      )}
     </Card>
   )
 }

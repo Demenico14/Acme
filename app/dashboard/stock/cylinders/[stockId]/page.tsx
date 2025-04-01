@@ -261,7 +261,7 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
     if (!restockCylinderId || !restockQuantity || !stockItem) {
       toast({
         title: "Validation Error",
-        description: "Please select a cylinder and specify a quantity",
+        description: "Please select a cylinder and specify a restock amount",
         variant: "destructive",
       })
       return
@@ -276,25 +276,45 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
         throw new Error("Cylinder not found")
       }
 
+      // Get the cylinder and its capacity
+      const cylinder = cylinders[cylinderIndex]
+      const maxCapacity = cylinder.size
+      const restockAmount = Number.parseFloat(restockQuantity)
+
+      // Validate restock amount
+      if (restockAmount <= 0) {
+        throw new Error("Restock amount must be greater than zero")
+      }
+
+      if (restockAmount > maxCapacity) {
+        throw new Error(`Cannot exceed cylinder capacity of ${maxCapacity} kg`)
+      }
+
       // Create a copy of the cylinders array
       const updatedCylinders = [...cylinders]
 
-      // Update the cylinder count
-      updatedCylinders[cylinderIndex].count += Number.parseInt(restockQuantity)
+      // Update the cylinder's last restocked timestamp and count
       updatedCylinders[cylinderIndex].lastRestocked = new Date().toISOString()
 
-      // Calculate new total stock
-      const totalStock = updatedCylinders.reduce((total, cylinder) => {
-        return total + cylinder.size * cylinder.count
+      // Calculate the previous total stock before this cylinder's update
+      const previousTotalStock = stockItem.stock
+
+      // Calculate the new total stock by summing all cylinders
+      // For the cylinder being updated, use the new restockAmount
+      const newTotalStock = updatedCylinders.reduce((total, cyl, index) => {
+        if (index === cylinderIndex) {
+          // For the cylinder being updated, use the new amount
+          return total + restockAmount * cyl.count
+        } else {
+          // For other cylinders, use their existing size * count
+          return total + cyl.size * cyl.count
+        }
       }, 0)
 
-      // Get previous stock for history
-      const previousStock = stockItem.stock
-
-      // Update stock item with new cylinders and calculated stock
+      // Update stock item with updated cylinders and new total stock level
       await updateDoc(doc(db, "stock", stockId), {
         cylinders: updatedCylinders,
-        stock: totalStock,
+        stock: newTotalStock,
         lastUpdated: new Date().toISOString(),
       })
 
@@ -303,10 +323,10 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
         await addDoc(collection(db, "stockHistory"), {
           gasType: stockItem.gasType,
           timestamp: new Date().toISOString(),
-          previousStock,
-          newStock: totalStock,
-          changeAmount: totalStock - previousStock,
-          reason: `Cylinder ${updatedCylinders[cylinderIndex].serialNumber} restocked (+${restockQuantity})`,
+          previousStock: previousTotalStock,
+          newStock: newTotalStock,
+          changeAmount: newTotalStock - previousTotalStock,
+          reason: `Cylinder ${cylinder.serialNumber} restocked to ${restockAmount} kg`,
           userId: user.uid,
           userName: user.displayName || user.email,
           isRestock: true,
@@ -314,21 +334,24 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
       }
 
       // Update local state
-      setCylinders(updatedCylinders)
+      setStockItem({
+        ...stockItem,
+        stock: newTotalStock,
+      })
 
       // Reset form
       setRestockCylinderId("")
-      setRestockQuantity("1")
+      setRestockQuantity("")
 
       toast({
         title: "Success",
-        description: `Cylinder restocked with ${restockQuantity} additional units`,
+        description: `Cylinder restocked to ${restockAmount} kg of gas. Total stock: ${newTotalStock.toFixed(2)} kg`,
       })
     } catch (error) {
       console.error("Error restocking cylinder:", error)
       toast({
         title: "Error",
-        description: "Failed to restock cylinder",
+        description: error instanceof Error ? error.message : "Failed to restock cylinder",
         variant: "destructive",
       })
     } finally {
@@ -465,8 +488,8 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
           {cylinders.length > 0 && (
             <Card className="mb-8 bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800">
               <CardHeader>
-                <CardTitle>Restock Existing Cylinder</CardTitle>
-                <CardDescription>Add more units to an existing cylinder</CardDescription>
+                <CardTitle>Restock Cylinder</CardTitle>
+                <CardDescription>Add gas to an existing cylinder by specifying the exact amount</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -479,7 +502,7 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
                       <SelectContent>
                         {cylinders.map((cylinder) => (
                           <SelectItem key={cylinder.id} value={cylinder.id}>
-                            {cylinder.serialNumber} - {cylinder.size} kg - Current: {cylinder.count} units
+                            {cylinder.serialNumber} - {cylinder.size} kg cylinder
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -487,14 +510,22 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
                   </div>
 
                   <div className="space-y-3">
-                    <Label htmlFor="restock-quantity">Additional Quantity</Label>
+                    <Label htmlFor="restock-quantity">Restock Amount (kg)</Label>
                     <Input
                       id="restock-quantity"
                       type="number"
-                      min="1"
+                      min="0.1"
+                      step="0.1"
+                      max={restockCylinderId ? cylinders.find((c) => c.id === restockCylinderId)?.size || 100 : 100}
                       value={restockQuantity}
                       onChange={(e) => setRestockQuantity(e.target.value)}
+                      placeholder="Enter gas amount in kg"
                     />
+                    {restockCylinderId && (
+                      <p className="text-xs text-muted-foreground">
+                        Max capacity: {cylinders.find((c) => c.id === restockCylinderId)?.size || 0} kg
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -572,7 +603,7 @@ export default function CylinderManagementPage({ params }: CylinderManagementPag
                                 size="sm"
                                 onClick={() => {
                                   setRestockCylinderId(cylinder.id)
-                                  setRestockQuantity("1")
+                                  setRestockQuantity("") // Don't pre-fill with cylinder size
                                 }}
                               >
                                 <RefreshCw className="mr-2 h-4 w-4" />
