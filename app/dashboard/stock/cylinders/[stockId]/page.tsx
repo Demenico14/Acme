@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { use } from "react" // Add this import
 import { useRouter } from "next/navigation"
 import { collection, getDocs, doc, getDoc, updateDoc, addDoc, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
@@ -18,13 +19,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/context/auth-context"
 
-type Props = {
-    params: { stockId: string }
-    searchParams?: { [key: string]: string | string[] | undefined }
-  }
+// Update the component to use React.use() to unwrap params
+interface CylinderManagementPageProps {
+  params: Promise<{ stockId: string }>
+}
 
-export default function CylinderManagementPage({ params }: Props) {
-    const { stockId } = params
+export default function CylinderManagementPage({ params }: CylinderManagementPageProps) {
+  // Unwrap the params using React.use()
+  const unwrappedParams = use(params)
+  const { stockId } = unwrappedParams
+
   const router = useRouter()
   const { toast } = useToast()
   const { user } = useAuth()
