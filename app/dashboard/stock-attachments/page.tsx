@@ -309,7 +309,7 @@ export default function StockAttachmentsPage() {
                       id="capacity"
                       name="capacity"
                       type="number"
-                      step="0.1"
+                      step="0.01"
                       min="0"
                       value={formData.capacity || ""}
                       onChange={handleInputChange}
