@@ -351,7 +351,7 @@ export default function StockAttachmentsPage() {
                 </div>
 
                 <div className="grid gap-2">
-                  <Label htmlFor="location">Location</Label>
+                  <Label htmlFor="location">Tar Weight</Label>
                   <Input id="location" name="location" value={formData.location} onChange={handleInputChange} />
                 </div>
 
@@ -491,7 +491,7 @@ export default function StockAttachmentsPage() {
                 </div>
 
                 <div className="grid gap-2">
-                  <Label htmlFor="edit-location">Location</Label>
+                  <Label htmlFor="edit-location">Tar Weight</Label>
                   <Input id="edit-location" name="location" value={formData.location} onChange={handleInputChange} />
                 </div>
 
@@ -562,7 +562,7 @@ export default function StockAttachmentsPage() {
                   <TableHead>Type</TableHead>
                   <TableHead>Serial Number</TableHead>
                   <TableHead>Condition</TableHead>
-                  <TableHead>Location</TableHead>
+                  <TableHead>Tar Weight</TableHead>
                   <TableHead>Next Inspection</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
