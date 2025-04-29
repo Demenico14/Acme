@@ -17,7 +17,7 @@ export default function TransactionDetailsDialog({ transaction, isOpen, onClose 
   const formatDate = (dateString: string) => {
     try {
       return format(new Date(dateString), "PPP p")
-    } catch (error) {
+    } catch {
       return dateString
     }
   }
