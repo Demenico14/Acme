@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,6 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { db } from "@/lib/firebase"
 import { collection, addDoc, serverTimestamp, getDocs, query } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
@@ -27,7 +26,6 @@ import { recordGasConsumption } from "@/lib/stock-service"
 import { useAuth } from "@/context/auth-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-
 interface AddTransactionDialogProps {
   isOpen: boolean
   onClose: () => void
@@ -71,8 +69,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [stockError, setStockError] = useState<string | null>(null)
   const [insufficientStock, setInsufficientStock] = useState(false)
   const [availableStock, setAvailableStock] = useState<number | null>(null)
-  const [priceType, setPriceType] = useState<"suggested" | "custom">("suggested")
-  const [transactionType, setTransactionType] = useState<"sale" | "restock">("sale")
+  const formSubmitted = useRef(false)
 
   // Basic transaction fields
   const [gasType, setGasType] = useState("")
@@ -83,6 +80,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [currency, setCurrency] = useState("KES")
   const [date, setDate] = useState<Date>(new Date())
   const [reason, setReason] = useState("")
+  const [isRestock, setIsRestock] = useState(false)
+  const [priceType, setPriceType] = useState<"suggested" | "custom">("suggested")
 
   // Credit transaction fields
   const [customerName, setCustomerName] = useState("")
@@ -98,7 +97,14 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [expiryDate, setExpiryDate] = useState("")
 
   const isCredit = paymentMethod === "Credit"
-  const isRestock = transactionType === "restock"
+
+  // Reset form when dialog opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      resetForm()
+      formSubmitted.current = false
+    }
+  }, [isOpen])
 
   // Fetch stock items when the dialog opens
   useEffect(() => {
@@ -115,7 +121,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       setInsufficientStock(false)
       setAvailableStock(null)
     }
-  }, [gasType, quantity, transactionType])
+  }, [gasType, quantity, isRestock])
 
   // Fetch all stock items from Firestore
   const fetchStockItems = async () => {
@@ -175,7 +181,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
   const resetForm = () => {
     // Reset transaction type
-    setTransactionType("sale")
+    setIsRestock(false)
     setPriceType("suggested")
 
     // Reset basic fields
@@ -207,12 +213,18 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   }
 
   const handleClose = () => {
-    resetForm()
     onClose()
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // Prevent duplicate submissions
+    if (formSubmitted.current || isSubmitting) {
+      return
+    }
+
+    formSubmitted.current = true
 
     if (!gasType || !quantity || !total) {
       toast({
@@ -220,6 +232,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         description: "Please fill in all required fields.",
         variant: "destructive",
       })
+      formSubmitted.current = false
       return
     }
 
@@ -232,6 +245,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           description: `No stock found for ${gasType}. Please check the gas type.`,
           variant: "destructive",
         })
+        formSubmitted.current = false
         return
       }
 
@@ -242,6 +256,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           description: `Not enough ${gasType} in stock. Available: ${stockItem.stock.toFixed(2)} kgs`,
           variant: "destructive",
         })
+        formSubmitted.current = false
         return
       }
     }
@@ -342,6 +357,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         description: "Failed to add transaction. Please try again.",
         variant: "destructive",
       })
+      formSubmitted.current = false
     } finally {
       setIsSubmitting(false)
     }
@@ -371,8 +387,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
             {/* Transaction Type Tabs */}
             <Tabs
               defaultValue="sale"
-              value={transactionType}
-              onValueChange={(value) => setTransactionType(value as "sale" | "restock")}
+              value={isRestock ? "restock" : "sale"}
+              onValueChange={(value) => setIsRestock(value === "restock")}
               className="w-full"
             >
               <TabsList className="grid w-full grid-cols-2">
@@ -433,30 +449,39 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
               {!isRestock && (
                 <div className="space-y-2 md:col-span-2">
                   <Label>Price Type</Label>
-                  <RadioGroup
-                    value={priceType}
-                    onValueChange={(value) => {
-                      setPriceType(value as "suggested" | "custom")
-                      // If switching to suggested, update the total with the suggested price
-                      if (value === "suggested" && suggestedPrice) {
-                        setTotal(suggestedPrice)
-                      }
-                    }}
-                    className="flex space-x-4"
-                  >
+                  <div className="flex space-x-4">
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="suggested" id="suggested" />
-                      <Label htmlFor="suggested" className="flex items-center">
+                      <input
+                        type="radio"
+                        id="suggested"
+                        name="priceType"
+                        checked={priceType === "suggested"}
+                        onChange={() => {
+                          setPriceType("suggested")
+                          if (suggestedPrice) {
+                            setTotal(suggestedPrice)
+                          }
+                        }}
+                        className="h-4 w-4"
+                      />
+                      <Label htmlFor="suggested" className="flex items-center cursor-pointer">
                         <Calculator className="h-4 w-4 mr-1" /> Suggested Price
                       </Label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="custom" id="custom" />
-                      <Label htmlFor="custom" className="flex items-center">
+                      <input
+                        type="radio"
+                        id="custom"
+                        name="priceType"
+                        checked={priceType === "custom"}
+                        onChange={() => setPriceType("custom")}
+                        className="h-4 w-4"
+                      />
+                      <Label htmlFor="custom" className="flex items-center cursor-pointer">
                         <Edit className="h-4 w-4 mr-1" /> Custom Price
                       </Label>
                     </div>
-                  </RadioGroup>
+                  </div>
                 </div>
               )}
 

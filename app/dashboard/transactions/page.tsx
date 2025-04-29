@@ -312,6 +312,8 @@ export default function TransactionsPage() {
   const handleAddTransaction = (newTransaction: Transaction) => {
     // Add the new transaction to the local state
     setTransactions([newTransaction, ...transactions])
+    // Refresh transactions from the database to ensure we have the latest data
+    fetchTransactions()
   }
 
   function renderTransactionsTable() {
@@ -417,7 +419,18 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold tracking-tight">Transactions</h2>
         <div className="flex space-x-2">
-          <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
+          {/* Only one Add Transaction button */}
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => {
+              // Ensure dialog is closed before opening it again
+              setIsAddDialogOpen(false)
+              // Use setTimeout to ensure state is updated before opening
+              setTimeout(() => setIsAddDialogOpen(true), 0)
+            }}
+            className="mr-2"
+          >
             <Plus className="h-4 w-4 mr-1" /> Add Transaction
           </Button>
           <Button variant={viewMode === "all" ? "default" : "outline"} size="sm" onClick={() => setViewMode("all")}>
@@ -528,6 +541,15 @@ export default function TransactionsPage() {
         </CardContent>
       </Card>
 
+      {/* Only render the dialog when isAddDialogOpen is true */}
+      {isAddDialogOpen && (
+        <AddTransactionDialog
+          isOpen={isAddDialogOpen}
+          onClose={() => setIsAddDialogOpen(false)}
+          onTransactionAdded={handleAddTransaction}
+        />
+      )}
+
       <TransactionDetailsDialog
         transaction={selectedTransaction}
         isOpen={isDetailsOpen}
@@ -554,12 +576,6 @@ export default function TransactionsPage() {
             : `Are you sure you want to delete all ${filteredTransactions.length} transactions? This action cannot be undone.`
         }
         isDeleting={isDeleting}
-      />
-
-      <AddTransactionDialog
-        isOpen={isAddDialogOpen}
-        onClose={() => setIsAddDialogOpen(false)}
-        onTransactionAdded={handleAddTransaction}
       />
     </div>
   )
