@@ -1,7 +1,7 @@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import type { Transaction } from "@/types"
 import { Badge } from "@/components/ui/badge"
-import { Calendar, CreditCard, Phone, User, Clock, CheckCircle, XCircle } from "lucide-react"
+import { Calendar, CreditCard, Phone, User, Clock, CheckCircle, XCircle, Calculator, Edit } from "lucide-react"
 import { format } from "date-fns"
 
 interface TransactionDetailsDialogProps {
@@ -46,9 +46,18 @@ export default function TransactionDetailsDialog({ transaction, isOpen, onClose 
             </div>
             <div>
               <h3 className="text-sm font-medium text-muted-foreground">Total</h3>
-              <p className="text-sm">
-                {transaction.currency} {transaction.total.toFixed(2)}
-              </p>
+              <div className="flex items-center">
+                <p className="text-sm">
+                  {transaction.currency} {transaction.total.toFixed(2)}
+                </p>
+                {transaction.isCustomTotal && <Edit className="ml-1 h-3 w-3 text-blue-500" aria-label="Custom total" />}
+              </div>
+              {transaction.isCustomTotal && transaction.calculatedTotal && (
+                <p className="text-xs text-muted-foreground flex items-center mt-1">
+                  <Calculator className="mr-1 h-3 w-3" />
+                  Calculated: {transaction.currency} {transaction.calculatedTotal.toFixed(2)}
+                </p>
+              )}
             </div>
             <div>
               <h3 className="text-sm font-medium text-muted-foreground">Date</h3>

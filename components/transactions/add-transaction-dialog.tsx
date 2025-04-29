@@ -13,7 +13,9 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { Transaction } from "@/types"
 import { validateTransaction } from "@/app/actions/transaction-actions"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { AlertCircle } from "lucide-react"
+import { AlertCircle, Calculator, Edit } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface AddTransactionDialogProps {
   isOpen: boolean
@@ -49,6 +51,9 @@ interface TransactionData {
   clientTimestamp: number
   sessionId: string
   priceType: "suggested" | "custom"
+  // Custom total fields
+  isCustomTotal?: boolean
+  calculatedTotal?: number
 }
 
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
@@ -57,6 +62,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [quantity, setQuantity] = useState<number>(0)
   const [price, setPrice] = useState<number>(0)
   const [total, setTotal] = useState<number>(0)
+  const [calculatedTotal, setCalculatedTotal] = useState<number>(0)
+  const [isCustomTotal, setIsCustomTotal] = useState<boolean>(false)
   const [currency, setCurrency] = useState<string>("USD")
   const [paymentMethod, setPaymentMethod] = useState<string>("Cash")
   const [date, setDate] = useState<Date>(new Date())
@@ -130,10 +137,16 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     }
   }, [selectedStock, quantity, isRestock])
 
-  // Update total when price or quantity changes
+  // Update calculated total when price or quantity changes
   useEffect(() => {
-    setTotal(price * quantity)
-  }, [price, quantity])
+    const newCalculatedTotal = price * quantity
+    setCalculatedTotal(newCalculatedTotal)
+
+    // Only update the displayed total if not using custom total
+    if (!isCustomTotal) {
+      setTotal(newCalculatedTotal)
+    }
+  }, [price, quantity, isCustomTotal])
 
   // Update price when selected stock changes
   useEffect(() => {
@@ -152,6 +165,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       setQuantity(0)
       setPrice(0)
       setTotal(0)
+      setCalculatedTotal(0)
+      setIsCustomTotal(false)
       setCurrency("USD")
       setPaymentMethod("Cash")
       setDate(new Date())
@@ -207,6 +222,36 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     return () => clearTimeout(timeoutId)
   }, [selectedStock, quantity, paymentMethod, date, stockItems])
 
+  // Handle custom total toggle
+  const handleCustomTotalToggle = (checked: boolean) => {
+    setIsCustomTotal(checked)
+    if (!checked) {
+      // Reset to calculated total when disabling custom total
+      setTotal(calculatedTotal)
+    }
+  }
+
+  // Validate custom total
+  const validateCustomTotal = (value: number): { isValid: boolean; message?: string } => {
+    // Implement business rules for custom total validation
+    if (value <= 0) {
+      return { isValid: false, message: "Total must be greater than zero" }
+    }
+
+    // Optional: Check if custom total is within reasonable range of calculated total
+    const calculatedValue = price * quantity
+    const percentDifference = Math.abs((value - calculatedValue) / calculatedValue) * 100
+
+    if (percentDifference > 50) {
+      return {
+        isValid: true,
+        message: "Warning: Custom total differs significantly from calculated value",
+      }
+    }
+
+    return { isValid: true }
+  }
+
   const handleSubmit = async () => {
     try {
       setIsSubmitting(true)
@@ -228,6 +273,27 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           variant: "destructive",
         })
         return
+      }
+
+      // Validate custom total if enabled
+      if (isCustomTotal) {
+        const validation = validateCustomTotal(total)
+        if (!validation.isValid) {
+          toast({
+            title: "Error",
+            description: validation.message || "Invalid custom total",
+            variant: "destructive",
+          })
+          return
+        }
+
+        if (validation.message) {
+          // Show warning but allow to proceed
+          const confirmProceed = window.confirm(`${validation.message}. Do you want to proceed?`)
+          if (!confirmProceed) {
+            return
+          }
+        }
       }
 
       // Check stock availability for sales (not restocks)
@@ -285,6 +351,12 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         clientTimestamp: Date.now(),
         sessionId,
         priceType,
+      }
+
+      // Add custom total information if applicable
+      if (isCustomTotal) {
+        transactionData.isCustomTotal = true
+        transactionData.calculatedTotal = calculatedTotal
       }
 
       // Add restock-specific fields
@@ -454,8 +526,41 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           </div>
 
           <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="total" className="text-right">
-              Total
+            <div className="text-right flex justify-end">
+              <Label htmlFor="custom-total-toggle" className="mr-2">
+                Custom Total
+              </Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help">
+                      <Edit className="h-4 w-4 text-muted-foreground" />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Override the calculated total with a custom amount</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <div className="col-span-3">
+              <Switch id="custom-total-toggle" checked={isCustomTotal} onCheckedChange={handleCustomTotalToggle} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="total" className="text-right flex items-center justify-end">
+              {isCustomTotal ? (
+                <span className="flex items-center">
+                  Total
+                  <Edit className="ml-1 h-3 w-3 text-blue-500" />
+                </span>
+              ) : (
+                <span className="flex items-center">
+                  Total
+                  <Calculator className="ml-1 h-3 w-3 text-muted-foreground" />
+                </span>
+              )}
             </Label>
             <div className="col-span-3 flex">
               <Select value={currency} onValueChange={setCurrency}>
@@ -477,10 +582,27 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                 value={total.toFixed(2)}
                 onChange={(e) => setTotal(Number.parseFloat(e.target.value) || 0)}
                 className="flex-1"
-                readOnly
+                readOnly={!isCustomTotal}
               />
             </div>
           </div>
+
+          {isCustomTotal && (
+            <div className="grid grid-cols-4 items-center gap-4">
+              <div className="col-start-2 col-span-3">
+                <div className="text-xs text-muted-foreground flex items-center">
+                  <Calculator className="mr-1 h-3 w-3" />
+                  Calculated: {currency} {calculatedTotal.toFixed(2)}
+                  {Math.abs(total - calculatedTotal) > 0.01 && (
+                    <span className="ml-2 text-amber-600">
+                      ({total > calculatedTotal ? "+" : "-"}
+                      {currency} {Math.abs(total - calculatedTotal).toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-4 items-center gap-4">
             <Label htmlFor="payment-method" className="text-right">

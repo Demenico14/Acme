@@ -47,6 +47,9 @@ export interface Transaction {
   clientTimestamp?: number
   sessionId?: string // Add session ID to track transactions from the same session
   priceType?: "suggested" | "custom" // Track which price type was used
+  // Custom total fields
+  isCustomTotal?: boolean
+  calculatedTotal?: number
 }
 
 export interface Address {
