@@ -1,31 +1,19 @@
 "use client"
-
-import type React from "react"
-
-import { useState, useEffect, useRef, useCallback } from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { DatePicker } from "@/components/ui/date-picker"
-import { Checkbox } from "@/components/ui/checkbox"
+import { useState, useEffect, useCallback } from "react"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit } from "firebase/firestore"
+import { collection, addDoc, getDocs, query, orderBy, doc, getDoc } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, AlertCircle, Calculator, Edit } from "lucide-react"
+import { DatePicker } from "@/components/ui/date-picker"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { Transaction } from "@/types"
-import { recordGasConsumption } from "@/lib/stock-service"
-import { useAuth } from "@/context/auth-context"
+import { validateTransaction } from "@/app/actions/transaction-actions"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AlertCircle } from "lucide-react"
 
 interface AddTransactionDialogProps {
   isOpen: boolean
@@ -33,149 +21,67 @@ interface AddTransactionDialogProps {
   onTransactionAdded: (transaction: Transaction) => void
 }
 
-// Define a type for the transaction data we're sending to Firestore
-// This is separate from the Transaction interface because Firestore uses serverTimestamp()
-interface FirestoreTransactionData {
-  gasType: string
-  kgs: number
-  paymentMethod: string
-  total: number
-  currency: string
-  date: string
-  reason?: string
-  isRestock?: boolean
-  customerName?: string
-  phoneNumber?: string
-  dueDate?: string
-  paid?: boolean
-  paidDate?: string
-  cardDetails?: Record<string, string>
-  priceType: "suggested" | "custom"
-  idempotencyKey: string
-  clientTimestamp: number
-  sessionId: string // Add session ID to track transactions from the same session
-}
-
 interface StockItem {
   id: string
   gasType: string
   price: number
   stock: number
-  lastUpdated: string
 }
 
-// Generate a unique session ID when the component is first loaded
-// This will be used to identify transactions from the same form session
-const SESSION_ID = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+interface TransactionData {
+  gasType: string
+  kgs: number
+  total: number
+  currency: string
+  paymentMethod: string
+  date: string
+  createdAt: string
+  isRestock?: boolean
+  reason?: string
+  // Credit transaction fields
+  customerName?: string
+  phoneNumber?: string
+  dueDate?: string
+  paid?: boolean
+  cardDetails?: Record<string, string>
+  // Duplicate prevention fields
+  idempotencyKey: string
+  clientTimestamp: number
+  sessionId: string
+  priceType: "suggested" | "custom"
+}
 
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
-  const { toast } = useToast()
-  const { user } = useAuth()
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [stockItems, setStockItems] = useState<StockItem[]>([])
-  const [stockLoading, setStockLoading] = useState(true)
-  const [stockError, setStockError] = useState<string | null>(null)
-  const [insufficientStock, setInsufficientStock] = useState(false)
-  const [availableStock, setAvailableStock] = useState<number | null>(null)
-  const formSubmitted = useRef(false)
-  const submissionInProgress = useRef(false)
-  const transactionCreated = useRef(false)
-
-  // Basic transaction fields
-  const [gasType, setGasType] = useState("")
-  const [quantity, setQuantity] = useState("")
-  const [paymentMethod, setPaymentMethod] = useState("Cash")
-  const [total, setTotal] = useState("")
-  const [suggestedPrice, setSuggestedPrice] = useState("")
-  const [currency, setCurrency] = useState("KES")
+  const [selectedStock, setSelectedStock] = useState<string>("")
+  const [quantity, setQuantity] = useState<number>(0)
+  const [price, setPrice] = useState<number>(0)
+  const [total, setTotal] = useState<number>(0)
+  const [currency, setCurrency] = useState<string>("USD")
+  const [paymentMethod, setPaymentMethod] = useState<string>("Cash")
   const [date, setDate] = useState<Date>(new Date())
-  const [reason, setReason] = useState("")
-  const [isRestock, setIsRestock] = useState(false)
+  const [isRestock, setIsRestock] = useState<boolean>(false)
+  const [reason, setReason] = useState<string>("")
   const [priceType, setPriceType] = useState<"suggested" | "custom">("suggested")
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false)
+  const [isCredit, setIsCredit] = useState<boolean>(false)
+  const [customerName, setCustomerName] = useState<string>("")
+  const [phoneNumber, setPhoneNumber] = useState<string>("")
+  const [dueDate, setDueDate] = useState<Date>(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)) // 30 days from now
+  const [sessionId] = useState<string>(`session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`)
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null)
+  const [existingTransaction, setExistingTransaction] = useState<Transaction | null>(null)
 
-  // Credit transaction fields
-  const [customerName, setCustomerName] = useState("")
-  const [phoneNumber, setPhoneNumber] = useState("")
-  const [dueDate, setDueDate] = useState<Date | undefined>(undefined)
-  const [paid, setPaid] = useState(false)
-  const [paidDate, setPaidDate] = useState<Date | undefined>(undefined)
+  const { toast } = useToast()
 
-  // Card details fields
-  const [cardType, setCardType] = useState("")
-  const [cardNumber, setCardNumber] = useState("")
-  const [nameOnCard, setNameOnCard] = useState("")
-  const [expiryDate, setExpiryDate] = useState("")
+  // Generate a unique idempotency key for this transaction
+  const generateIdempotencyKey = useCallback(() => {
+    return `${selectedStock}_${quantity}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+  }, [selectedStock, quantity])
 
-  const isCredit = paymentMethod === "Credit"
-
-  // Check stock availability when gas type or quantity changes
-  const checkStockAvailability = useCallback(() => {
-    if (!gasType || !quantity || isRestock) {
-      setInsufficientStock(false)
-      setAvailableStock(null)
-      return
-    }
-
-    const stockItem = stockItems.find((item) => item.gasType === gasType)
-    if (!stockItem) {
-      setInsufficientStock(true)
-      setAvailableStock(0)
-      return
-    }
-
-    const requestedQuantity = Number.parseFloat(quantity)
-    setAvailableStock(stockItem.stock)
-
-    if (requestedQuantity > stockItem.stock) {
-      setInsufficientStock(true)
-    } else {
-      setInsufficientStock(false)
-    }
-
-    // Calculate suggested price
-    const calculatedPrice = stockItem.price * requestedQuantity
-    setSuggestedPrice(calculatedPrice.toFixed(2))
-
-    // If using suggested price, update the total
-    if (priceType === "suggested") {
-      setTotal(calculatedPrice.toFixed(2))
-    }
-  }, [gasType, quantity, isRestock, stockItems, priceType])
-
-  // Reset form when dialog opens/closes
-  useEffect(() => {
-    if (isOpen) {
-      resetForm()
-      formSubmitted.current = false
-      submissionInProgress.current = false
-      transactionCreated.current = false
-    }
-  }, [isOpen])
-
-  // Fetch stock items when the dialog opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchStockItems()
-    }
-  }, [isOpen])
-
-  // Check stock availability when gas type or quantity changes
-  useEffect(() => {
-    if (gasType && quantity) {
-      checkStockAvailability()
-    } else {
-      setInsufficientStock(false)
-      setAvailableStock(null)
-    }
-  }, [gasType, quantity, isRestock, checkStockAvailability])
-
-  // Fetch all stock items from Firestore
-  const fetchStockItems = async () => {
+  const fetchStockItems = useCallback(async () => {
     try {
-      setStockLoading(true)
-      setStockError(null)
-
-      const stockQuery = query(collection(db, "stock"))
+      const stockQuery = query(collection(db, "stock"), orderBy("gasType"))
       const querySnapshot = await getDocs(stockQuery)
       const stockData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
@@ -183,259 +89,240 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       })) as StockItem[]
 
       setStockItems(stockData)
+
+      // Set default selected stock if available
+      if (stockData.length > 0 && !selectedStock) {
+        setSelectedStock(stockData[0].id)
+        setPrice(stockData[0].price)
+      }
     } catch (error) {
       console.error("Error fetching stock items:", error)
-      setStockError("Failed to load stock data. Please try again.")
-    } finally {
-      setStockLoading(false)
-    }
-  }
-
-  const resetForm = () => {
-    // Reset transaction type
-    setIsRestock(false)
-    setPriceType("suggested")
-
-    // Reset basic fields
-    setGasType("")
-    setQuantity("")
-    setPaymentMethod("Cash")
-    setTotal("")
-    setSuggestedPrice("")
-    setCurrency("KES")
-    setDate(new Date())
-    setReason("")
-
-    // Reset credit fields
-    setCustomerName("")
-    setPhoneNumber("")
-    setDueDate(undefined)
-    setPaid(false)
-    setPaidDate(undefined)
-
-    // Reset card fields
-    setCardType("")
-    setCardNumber("")
-    setNameOnCard("")
-    setExpiryDate("")
-
-    // Reset stock check
-    setInsufficientStock(false)
-    setAvailableStock(null)
-  }
-
-  const handleClose = () => {
-    // Reset the form submission ref to ensure we can submit again after reopening
-    formSubmitted.current = false
-    submissionInProgress.current = false
-    transactionCreated.current = false
-    // Reset the form data
-    resetForm()
-    // Close the dialog
-    onClose()
-  }
-
-  // Check for recent duplicate transactions
-  const checkForDuplicates = async (gasType: string, quantity: number): Promise<boolean> => {
-    try {
-      // Look for transactions with the same gas type and quantity in the last 60 seconds
-      const timeThreshold = Date.now() - 60000 // 60 seconds
-
-      const duplicateQuery = query(
-        collection(db, "transactions"),
-        where("gasType", "==", gasType),
-        where("kgs", "==", quantity),
-        where("clientTimestamp", ">=", timeThreshold),
-        orderBy("clientTimestamp", "desc"),
-        limit(5),
-      )
-
-      const querySnapshot = await getDocs(duplicateQuery)
-
-      // If we found any transactions that match these criteria, it's a potential duplicate
-      return querySnapshot.size > 0
-    } catch (error) {
-      console.error("Error checking for duplicate transactions:", error)
-      return false // If there's an error, allow the transaction to proceed
-    }
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    e.stopPropagation() // Prevent event bubbling
-
-    // Multiple layers of protection against duplicate submissions
-    if (formSubmitted.current || submissionInProgress.current || transactionCreated.current || isSubmitting) {
-      console.log("Preventing duplicate submission", {
-        formSubmitted: formSubmitted.current,
-        submissionInProgress: submissionInProgress.current,
-        transactionCreated: transactionCreated.current,
-        isSubmitting,
-      })
-      return
-    }
-
-    // Set flags to prevent duplicate submissions
-    formSubmitted.current = true
-    submissionInProgress.current = true
-
-    if (!gasType || !quantity || !total) {
       toast({
-        title: "Missing fields",
-        description: "Please fill in all required fields.",
+        title: "Error",
+        description: "Failed to load stock items. Please try again.",
         variant: "destructive",
       })
-      formSubmitted.current = false
-      submissionInProgress.current = false
-      return
     }
+  }, [selectedStock, toast])
 
-    // Parse quantity once to ensure consistent values
-    const parsedQuantity = Number.parseFloat(quantity)
-    const parsedTotal = Number.parseFloat(total)
+  useEffect(() => {
+    if (isOpen) {
+      fetchStockItems()
+    }
+  }, [isOpen, fetchStockItems])
 
-    // Check stock availability again before submitting
-    if (!isRestock) {
-      const stockItem = stockItems.find((item) => item.gasType === gasType)
-      if (!stockItem) {
-        toast({
-          title: "Stock not found",
-          description: `No stock found for ${gasType}. Please check the gas type.`,
-          variant: "destructive",
-        })
-        formSubmitted.current = false
-        submissionInProgress.current = false
+  // Check stock availability when quantity changes
+  const checkStockAvailability = useCallback(async () => {
+    if (!selectedStock || quantity <= 0 || isRestock) return true
+
+    try {
+      const stockRef = doc(db, "stock", selectedStock)
+      const stockDoc = await getDoc(stockRef)
+
+      if (stockDoc.exists()) {
+        const stockData = stockDoc.data() as StockItem
+        return stockData.stock >= quantity
+      }
+      return false
+    } catch (error) {
+      console.error("Error checking stock availability:", error)
+      return false
+    }
+  }, [selectedStock, quantity, isRestock])
+
+  // Update total when price or quantity changes
+  useEffect(() => {
+    setTotal(price * quantity)
+  }, [price, quantity])
+
+  // Update price when selected stock changes
+  useEffect(() => {
+    if (selectedStock && priceType === "suggested") {
+      const selectedItem = stockItems.find((item) => item.id === selectedStock)
+      if (selectedItem) {
+        setPrice(selectedItem.price)
+      }
+    }
+  }, [selectedStock, stockItems, priceType])
+
+  // Reset form when dialog opens/closes
+  useEffect(() => {
+    if (!isOpen) {
+      setSelectedStock("")
+      setQuantity(0)
+      setPrice(0)
+      setTotal(0)
+      setCurrency("USD")
+      setPaymentMethod("Cash")
+      setDate(new Date())
+      setIsRestock(false)
+      setReason("")
+      setPriceType("suggested")
+      setIsCredit(false)
+      setCustomerName("")
+      setPhoneNumber("")
+      setDueDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+      setDuplicateWarning(null)
+      setExistingTransaction(null)
+    }
+  }, [isOpen])
+
+  // Check for potential duplicates when transaction details change
+  useEffect(() => {
+    const checkForDuplicates = async () => {
+      if (!selectedStock || quantity <= 0) {
+        setDuplicateWarning(null)
+        setExistingTransaction(null)
         return
       }
 
-      if (parsedQuantity > stockItem.stock) {
-        toast({
-          title: "Insufficient stock",
-          description: `Not enough ${gasType} in stock. Available: ${stockItem.stock.toFixed(2)} kgs`,
-          variant: "destructive",
+      const selectedItem = stockItems.find((item) => item.id === selectedStock)
+      if (!selectedItem) return
+
+      try {
+        const result = await validateTransaction({
+          gasType: selectedItem.gasType,
+          kgs: quantity,
+          paymentMethod,
+          date: date.toISOString(),
         })
-        formSubmitted.current = false
-        submissionInProgress.current = false
-        return
+
+        if (result.isDuplicate) {
+          setDuplicateWarning("This appears to be a duplicate of a recent transaction.")
+          setExistingTransaction(result.existingTransaction as Transaction)
+        } else {
+          setDuplicateWarning(null)
+          setExistingTransaction(null)
+        }
+      } catch (error) {
+        console.error("Error checking for duplicates:", error)
       }
     }
 
+    // Debounce the duplicate check to avoid too many requests
+    const timeoutId = setTimeout(() => {
+      checkForDuplicates()
+    }, 500)
+
+    return () => clearTimeout(timeoutId)
+  }, [selectedStock, quantity, paymentMethod, date, stockItems])
+
+  const handleSubmit = async () => {
     try {
       setIsSubmitting(true)
 
-      // Check for duplicate transactions
-      const hasDuplicates = await checkForDuplicates(gasType, parsedQuantity)
+      // Validate inputs
+      if (!selectedStock) {
+        toast({
+          title: "Error",
+          description: "Please select a gas type.",
+          variant: "destructive",
+        })
+        return
+      }
 
-      if (hasDuplicates) {
-        // Ask for confirmation before proceeding
-        const confirmContinue = window.confirm(
-          "A similar transaction was recently added. Are you sure you want to add another one?",
-        )
+      if (quantity <= 0) {
+        toast({
+          title: "Error",
+          description: "Quantity must be greater than zero.",
+          variant: "destructive",
+        })
+        return
+      }
 
-        if (!confirmContinue) {
-          formSubmitted.current = false
-          submissionInProgress.current = false
-          setIsSubmitting(false)
+      // Check stock availability for sales (not restocks)
+      if (!isRestock) {
+        const hasStock = await checkStockAvailability()
+        if (!hasStock) {
+          toast({
+            title: "Error",
+            description: "Not enough stock available for this transaction.",
+            variant: "destructive",
+          })
           return
         }
       }
 
-      // Generate an idempotency key to prevent duplicate transactions
-      const idempotencyKey = `${Date.now()}-${gasType}-${parsedQuantity}-${Math.random().toString(36).substring(2, 9)}`
-      const clientTimestamp = Date.now()
+      // Get the selected stock item
+      const selectedItem = stockItems.find((item) => item.id === selectedStock)
+      if (!selectedItem) {
+        toast({
+          title: "Error",
+          description: "Selected stock item not found.",
+          variant: "destructive",
+        })
+        return
+      }
 
-      // Prepare transaction data for Firestore
-      const firestoreData: FirestoreTransactionData = {
-        gasType,
-        kgs: parsedQuantity,
+      // Check for duplicates on the server
+      const validationResult = await validateTransaction({
+        gasType: selectedItem.gasType,
+        kgs: quantity,
         paymentMethod,
-        total: parsedTotal,
-        currency,
         date: date.toISOString(),
-        isRestock,
-        priceType,
-        idempotencyKey,
-        clientTimestamp,
-        sessionId: SESSION_ID, // Add session ID
-      }
-
-      // Add optional fields if they exist
-      if (reason) firestoreData.reason = reason
-
-      // Add credit-specific fields if payment method is credit
-      if (isCredit) {
-        if (customerName) firestoreData.customerName = customerName
-        if (phoneNumber) firestoreData.phoneNumber = phoneNumber
-        if (dueDate) firestoreData.dueDate = dueDate.toISOString()
-        firestoreData.paid = paid
-        if (paid && paidDate) firestoreData.paidDate = paidDate.toISOString()
-
-        // Add card details if any are provided
-        const cardDetails: Record<string, string> = {}
-        if (cardType) cardDetails.cardType = cardType
-        if (cardNumber) cardDetails.cardNumber = cardNumber
-        if (nameOnCard) cardDetails.nameOnCard = nameOnCard
-        if (expiryDate) cardDetails.expiryDate = expiryDate
-
-        if (Object.keys(cardDetails).length > 0) {
-          firestoreData.cardDetails = cardDetails
-        }
-      }
-
-      // Add to Firestore with serverTimestamp
-      const docRef = await addDoc(collection(db, "transactions"), {
-        ...firestoreData,
-        createdAt: serverTimestamp(),
       })
 
-      // Mark that we've successfully created a transaction
-      transactionCreated.current = true
-
-      // Create a Transaction object for the UI
-      // Use the current date string for createdAt since serverTimestamp isn't available client-side
-      const newTransaction: Transaction = {
-        ...firestoreData,
-        id: docRef.id,
-        createdAt: new Date().toISOString(),
-      }
-
-      // Update stock quantity if this is not a restock transaction
-      if (!isRestock) {
-        const stockItem = stockItems.find((item) => item.gasType === gasType)
-        if (stockItem && user) {
-          // Use the recordGasConsumption function from stock-service.ts
-          const result = await recordGasConsumption(
-            stockItem.id,
-            parsedQuantity,
-            user.uid,
-            user.displayName || user.email || "Unknown User",
-            reason || "Sale",
-          )
-
-          if (!result.success) {
-            throw new Error("Failed to update stock quantity")
-          }
+      if (validationResult.isDuplicate) {
+        // Show confirmation dialog
+        const confirmDuplicate = window.confirm(
+          "This appears to be a duplicate transaction. Are you sure you want to proceed?",
+        )
+        if (!confirmDuplicate) {
+          return
         }
-      } else {
-        // If it's a restock transaction, we need to add to the stock instead
-        // This would typically be handled elsewhere, but we'll add a note
-        toast({
-          title: "Restock transaction created",
-          description:
-            "Note: Restock transactions should be processed through the stock management interface to update inventory.",
-        })
       }
 
-      // Call the callback with the new transaction
+      // Create transaction data
+      const transactionData: TransactionData = {
+        gasType: selectedItem.gasType,
+        kgs: quantity,
+        total,
+        currency,
+        paymentMethod,
+        date: date.toISOString(),
+        createdAt: new Date().toISOString(),
+        idempotencyKey: generateIdempotencyKey(),
+        clientTimestamp: Date.now(),
+        sessionId,
+        priceType,
+      }
+
+      // Add restock-specific fields
+      if (isRestock) {
+        transactionData.isRestock = true
+        transactionData.reason = reason
+      }
+
+      // Add credit-specific fields
+      if (isCredit) {
+        transactionData.customerName = customerName
+        transactionData.phoneNumber = phoneNumber
+        transactionData.dueDate = dueDate.toISOString()
+        transactionData.paid = false
+        transactionData.cardDetails = {
+          // Add card details if needed
+        }
+      }
+
+      // Add the transaction to Firestore
+      const docRef = await addDoc(collection(db, "transactions"), transactionData)
+
+      // Get the added transaction with its ID
+      const newTransaction = {
+        id: docRef.id,
+        ...transactionData,
+      } as Transaction
+
+      // Notify parent component
       onTransactionAdded(newTransaction)
 
       toast({
-        title: "Transaction added",
-        description: `The ${isRestock ? "restock" : "sale"} transaction has been successfully added${!isRestock ? " and stock updated" : ""}.`,
+        title: "Success",
+        description: "Transaction added successfully.",
       })
 
-      // Close the dialog and reset form
-      handleClose()
+      // Close the dialog
+      onClose()
     } catch (error) {
       console.error("Error adding transaction:", error)
       toast({
@@ -443,324 +330,254 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         description: "Failed to add transaction. Please try again.",
         variant: "destructive",
       })
-      formSubmitted.current = false
-      submissionInProgress.current = false
-      transactionCreated.current = false
     } finally {
       setIsSubmitting(false)
     }
   }
 
   return (
-    <Dialog
-      open={isOpen}
-      onOpenChange={(open) => {
-        if (!open) handleClose()
-      }}
-    >
-      <DialogContent className="sm:max-w-md md:max-w-lg">
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle>Add New Transaction</DialogTitle>
           <DialogDescription>Enter the details for the new transaction.</DialogDescription>
         </DialogHeader>
 
-        {stockLoading ? (
-          <div className="flex justify-center py-4">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-            <span className="ml-2">Loading stock data...</span>
-          </div>
-        ) : stockError ? (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Error</AlertTitle>
-            <AlertDescription>{stockError}</AlertDescription>
+        {duplicateWarning && existingTransaction && (
+          <Alert variant="warning" className="bg-amber-50 border-amber-200 mb-4">
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+            <AlertTitle className="text-amber-800">Potential Duplicate Transaction</AlertTitle>
+            <AlertDescription className="text-amber-700">
+              <p>{duplicateWarning}</p>
+              <p className="text-xs mt-1">
+                Existing transaction: {existingTransaction.gasType}, {existingTransaction.kgs} kg,{" "}
+                {new Date(existingTransaction.date).toLocaleString()}
+              </p>
+            </AlertDescription>
           </Alert>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Transaction Type Tabs */}
-            <Tabs
-              defaultValue="sale"
-              value={isRestock ? "restock" : "sale"}
-              onValueChange={(value) => setIsRestock(value === "restock")}
-              className="w-full"
+        )}
+
+        <div className="grid gap-4 py-4">
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="transaction-type" className="text-right">
+              Type
+            </Label>
+            <div className="col-span-3">
+              <RadioGroup
+                defaultValue="sale"
+                value={isRestock ? "restock" : "sale"}
+                onValueChange={(value) => setIsRestock(value === "restock")}
+                className="flex space-x-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="sale" id="sale" />
+                  <Label htmlFor="sale">Sale</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="restock" id="restock" />
+                  <Label htmlFor="restock">Restock</Label>
+                </div>
+              </RadioGroup>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="gas-type" className="text-right">
+              Gas Type
+            </Label>
+            <Select value={selectedStock} onValueChange={setSelectedStock}>
+              <SelectTrigger className="col-span-3">
+                <SelectValue placeholder="Select gas type" />
+              </SelectTrigger>
+              <SelectContent>
+                {stockItems.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.gasType} (${item.price.toFixed(2)}/kg)
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="quantity" className="text-right">
+              Quantity (kg)
+            </Label>
+            <Input
+              id="quantity"
+              type="number"
+              min="0"
+              step="0.01"
+              value={quantity || ""}
+              onChange={(e) => setQuantity(Number.parseFloat(e.target.value) || 0)}
+              className="col-span-3"
+            />
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="price-type" className="text-right">
+              Price Type
+            </Label>
+            <div className="col-span-3">
+              <RadioGroup
+                defaultValue="suggested"
+                value={priceType}
+                onValueChange={(value) => setPriceType(value as "suggested" | "custom")}
+                className="flex space-x-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="suggested" id="suggested" />
+                  <Label htmlFor="suggested">Suggested</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="custom" id="custom" />
+                  <Label htmlFor="custom">Custom</Label>
+                </div>
+              </RadioGroup>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="price" className="text-right">
+              Price per kg
+            </Label>
+            <Input
+              id="price"
+              type="number"
+              min="0"
+              step="0.01"
+              value={price || ""}
+              onChange={(e) => setPrice(Number.parseFloat(e.target.value) || 0)}
+              className="col-span-3"
+              disabled={priceType === "suggested"}
+            />
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="total" className="text-right">
+              Total
+            </Label>
+            <div className="col-span-3 flex">
+              <Select value={currency} onValueChange={setCurrency} className="w-24 mr-2">
+                <SelectTrigger>
+                  <SelectValue placeholder="Currency" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="USD">USD</SelectItem>
+                  <SelectItem value="EUR">EUR</SelectItem>
+                  <SelectItem value="GBP">GBP</SelectItem>
+                  <SelectItem value="KES">KES</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                id="total"
+                type="number"
+                min="0"
+                step="0.01"
+                value={total.toFixed(2)}
+                onChange={(e) => setTotal(Number.parseFloat(e.target.value) || 0)}
+                className="flex-1"
+                readOnly
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="payment-method" className="text-right">
+              Payment Method
+            </Label>
+            <Select
+              value={paymentMethod}
+              onValueChange={(value) => {
+                setPaymentMethod(value)
+                setIsCredit(value === "Credit")
+              }}
             >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="sale">Sale Transaction</TabsTrigger>
-                <TabsTrigger value="restock">Restock Transaction</TabsTrigger>
-              </TabsList>
-            </Tabs>
+              <SelectTrigger className="col-span-3">
+                <SelectValue placeholder="Select payment method" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Cash">Cash</SelectItem>
+                <SelectItem value="Card">Card</SelectItem>
+                <SelectItem value="Mobile Money">Mobile Money</SelectItem>
+                <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                <SelectItem value="Credit">Credit</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Gas Type */}
-              <div className="space-y-2">
-                <Label htmlFor="gasType">Gas Type *</Label>
-                <Select value={gasType} onValueChange={setGasType} required>
-                  <SelectTrigger id="gasType">
-                    <SelectValue placeholder="Select gas type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {stockItems.length > 0 ? (
-                      stockItems.map((item) => (
-                        <SelectItem key={item.id} value={item.gasType}>
-                          {item.gasType} ({item.stock.toFixed(2)} kgs available)
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="" disabled>
-                        No gas types available
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-                {availableStock !== null && !isRestock && (
-                  <p className="text-xs text-muted-foreground mt-1">Available: {availableStock.toFixed(2)} kgs</p>
-                )}
-              </div>
+          <div className="grid grid-cols-4 items-center gap-4">
+            <Label htmlFor="date" className="text-right">
+              Date
+            </Label>
+            <div className="col-span-3">
+              <DatePicker date={date} setDate={setDate} />
+            </div>
+          </div>
 
-              {/* Quantity */}
-              <div className="space-y-2">
-                <Label htmlFor="quantity" className={insufficientStock ? "text-destructive" : ""}>
-                  Quantity (kgs) *
+          {isRestock && (
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="reason" className="text-right">
+                Reason
+              </Label>
+              <Input
+                id="reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="col-span-3"
+                placeholder="Reason for restock"
+              />
+            </div>
+          )}
+
+          {isCredit && (
+            <>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="customer-name" className="text-right">
+                  Customer Name
                 </Label>
                 <Input
-                  id="quantity"
-                  type="number"
-                  step="0.01"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  required
-                  className={insufficientStock ? "border-destructive" : ""}
+                  id="customer-name"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="col-span-3"
+                  placeholder="Customer name"
                 />
-                {insufficientStock && !isRestock && (
-                  <p className="text-xs text-destructive">
-                    Insufficient stock. Available: {availableStock?.toFixed(2)} kgs
-                  </p>
-                )}
               </div>
 
-              {/* Price Type Selection - only show for sales */}
-              {!isRestock && (
-                <div className="space-y-2 md:col-span-2">
-                  <Label>Price Type</Label>
-                  <div className="flex space-x-4">
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="radio"
-                        id="suggested"
-                        name="priceType"
-                        checked={priceType === "suggested"}
-                        onChange={() => {
-                          setPriceType("suggested")
-                          if (suggestedPrice) {
-                            setTotal(suggestedPrice)
-                          }
-                        }}
-                        className="h-4 w-4"
-                      />
-                      <Label htmlFor="suggested" className="flex items-center cursor-pointer">
-                        <Calculator className="h-4 w-4 mr-1" /> Suggested Price
-                      </Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="radio"
-                        id="custom"
-                        name="priceType"
-                        checked={priceType === "custom"}
-                        onChange={() => setPriceType("custom")}
-                        className="h-4 w-4"
-                      />
-                      <Label htmlFor="custom" className="flex items-center cursor-pointer">
-                        <Edit className="h-4 w-4 mr-1" /> Custom Price
-                      </Label>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Payment Method */}
-              <div className="space-y-2">
-                <Label htmlFor="paymentMethod">Payment Method *</Label>
-                <Select value={paymentMethod} onValueChange={setPaymentMethod} required>
-                  <SelectTrigger id="paymentMethod">
-                    <SelectValue placeholder="Select payment method" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Cash">Cash</SelectItem>
-                    <SelectItem value="Credit">Credit</SelectItem>
-                    <SelectItem value="Wallet">Wallet</SelectItem>
-                    <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                    <SelectItem value="Debit Card">Debit Card</SelectItem>
-                    <SelectItem value="Credit Card">Credit Card</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Total */}
-              <div className="space-y-2">
-                <Label htmlFor="total">Total Amount *</Label>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="phone-number" className="text-right">
+                  Phone Number
+                </Label>
                 <Input
-                  id="total"
-                  type="number"
-                  step="0.01"
-                  value={total}
-                  onChange={(e) => setTotal(e.target.value)}
-                  required
-                  disabled={priceType === "suggested" && !isRestock}
-                  className={priceType === "suggested" && !isRestock ? "bg-muted" : ""}
+                  id="phone-number"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  className="col-span-3"
+                  placeholder="Phone number"
                 />
-                {gasType && quantity && !isRestock && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Suggested price: {suggestedPrice || "0.00"} {currency}
-                  </p>
-                )}
               </div>
 
-              {/* Currency */}
-              <div className="space-y-2">
-                <Label htmlFor="currency">Currency *</Label>
-                <Select value={currency} onValueChange={setCurrency} required>
-                  <SelectTrigger id="currency">
-                    <SelectValue placeholder="Select currency" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="KES">KES</SelectItem>
-                    <SelectItem value="USD">USD</SelectItem>
-                    <SelectItem value="EUR">EUR</SelectItem>
-                    <SelectItem value="GBP">GBP</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Date */}
-              <div className="space-y-2">
-                <Label htmlFor="date">Transaction Date *</Label>
-                <DatePicker selected={date} onSelect={(date) => date && setDate(date)} />
-              </div>
-
-              {/* Reason */}
-              <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="reason">Reason (Optional)</Label>
-                <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-              </div>
-            </div>
-
-            {/* Credit-specific fields */}
-            {isCredit && !isRestock && (
-              <>
-                <div className="mt-6 border-t pt-4">
-                  <h3 className="text-lg font-medium mb-4">Credit Details</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Customer Name */}
-                    <div className="space-y-2">
-                      <Label htmlFor="customerName">Customer Name</Label>
-                      <Input id="customerName" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-                    </div>
-
-                    {/* Phone Number */}
-                    <div className="space-y-2">
-                      <Label htmlFor="phoneNumber">Phone Number</Label>
-                      <Input id="phoneNumber" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
-                    </div>
-
-                    {/* Due Date */}
-                    <div className="space-y-2">
-                      <Label htmlFor="dueDate">Due Date</Label>
-                      <DatePicker selected={dueDate} onSelect={(date) => date && setDueDate(date)} />
-                    </div>
-
-                    {/* Paid Status */}
-                    <div className="flex items-center space-x-2 pt-6">
-                      <Checkbox id="paid" checked={paid} onCheckedChange={(checked) => setPaid(checked === true)} />
-                      <Label htmlFor="paid">Already Paid</Label>
-                    </div>
-
-                    {/* Paid Date (only if paid is true) */}
-                    {paid && (
-                      <div className="space-y-2">
-                        <Label htmlFor="paidDate">Payment Date</Label>
-                        <DatePicker selected={paidDate} onSelect={(date) => date && setPaidDate(date)} />
-                      </div>
-                    )}
-                  </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="due-date" className="text-right">
+                  Due Date
+                </Label>
+                <div className="col-span-3">
+                  <DatePicker date={dueDate} setDate={setDueDate} />
                 </div>
+              </div>
+            </>
+          )}
+        </div>
 
-                {/* Card Details */}
-                <div className="mt-6 border-t pt-4">
-                  <h3 className="text-lg font-medium mb-4">Card Details (Optional)</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Card Type */}
-                    <div className="space-y-2">
-                      <Label htmlFor="cardType">Card Type</Label>
-                      <Select value={cardType} onValueChange={setCardType}>
-                        <SelectTrigger id="cardType">
-                          <SelectValue placeholder="Select card type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="Visa">Visa</SelectItem>
-                          <SelectItem value="Mastercard">Mastercard</SelectItem>
-                          <SelectItem value="American Express">American Express</SelectItem>
-                          <SelectItem value="Discover">Discover</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* Card Number */}
-                    <div className="space-y-2">
-                      <Label htmlFor="cardNumber">Card Number</Label>
-                      <Input
-                        id="cardNumber"
-                        value={cardNumber}
-                        onChange={(e) => setCardNumber(e.target.value)}
-                        placeholder="Last 4 digits only"
-                      />
-                    </div>
-
-                    {/* Name on Card */}
-                    <div className="space-y-2">
-                      <Label htmlFor="nameOnCard">Name on Card</Label>
-                      <Input id="nameOnCard" value={nameOnCard} onChange={(e) => setNameOnCard(e.target.value)} />
-                    </div>
-
-                    {/* Expiry Date */}
-                    <div className="space-y-2">
-                      <Label htmlFor="expiryDate">Expiry Date</Label>
-                      <Input
-                        id="expiryDate"
-                        value={expiryDate}
-                        onChange={(e) => setExpiryDate(e.target.value)}
-                        placeholder="MM/YY"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            <DialogFooter className="mt-6">
-              <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={
-                  isSubmitting ||
-                  (!isRestock && insufficientStock) ||
-                  (!isRestock && priceType === "suggested" && !suggestedPrice)
-                }
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Adding...
-                  </>
-                ) : (
-                  `Add ${isRestock ? "Restock" : "Sale"} Transaction`
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
+        <div className="flex justify-end space-x-2">
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={isSubmitting}>
+            {isSubmitting ? "Adding..." : "Add Transaction"}
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   )
