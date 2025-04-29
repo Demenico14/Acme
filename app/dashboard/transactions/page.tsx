@@ -1,7 +1,7 @@
 "use client"
 import { db } from "@/lib/firebase"
 import { collection, deleteDoc, doc, getDocs, orderBy, query, writeBatch } from "firebase/firestore"
-import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye, Trash2 } from "lucide-react"
+import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye, Trash2, Plus } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useEffect, useState } from "react"
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import TransactionDetailsDialog from "@/components/transactions/transaction-details-dialog"
 import DeleteConfirmationDialog from "@/components/transactions/delete-confirmation-dialog"
 import { useToast } from "@/hooks/use-toast"
+import AddTransactionDialog from "@/components/transactions/add-transaction-dialog"
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -30,6 +31,7 @@ export default function TransactionsPage() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null)
   const { toast } = useToast()
+  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
 
   const transactionsPerPage = 20
 
@@ -296,6 +298,11 @@ export default function TransactionsPage() {
     }
   }
 
+  const handleAddTransaction = (newTransaction: Transaction) => {
+    // Add the new transaction to the local state
+    setTransactions([newTransaction, ...transactions])
+  }
+
   function renderTransactionsTable() {
     if (loading) {
       return (
@@ -394,6 +401,9 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold tracking-tight">Transactions</h2>
         <div className="flex space-x-2">
+          <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
+            <Plus className="h-4 w-4 mr-1" /> Add Transaction
+          </Button>
           <Button variant={viewMode === "all" ? "default" : "outline"} size="sm" onClick={() => setViewMode("all")}>
             All Transactions
           </Button>
@@ -528,6 +538,12 @@ export default function TransactionsPage() {
             : `Are you sure you want to delete all ${filteredTransactions.length} transactions? This action cannot be undone.`
         }
         isDeleting={isDeleting}
+      />
+
+      <AddTransactionDialog
+        isOpen={isAddDialogOpen}
+        onClose={() => setIsAddDialogOpen(false)}
+        onTransactionAdded={handleAddTransaction}
       />
     </div>
   )
