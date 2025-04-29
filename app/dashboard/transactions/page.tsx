@@ -1,7 +1,7 @@
 "use client"
 import { db } from "@/lib/firebase"
-import { collection, getDocs, orderBy, query } from "firebase/firestore"
-import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye } from "lucide-react"
+import { collection, deleteDoc, doc, getDocs, orderBy, query, writeBatch } from "firebase/firestore"
+import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye, Trash2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useEffect, useState } from "react"
@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import TransactionDetailsDialog from "@/components/transactions/transaction-details-dialog"
+import DeleteConfirmationDialog from "@/components/transactions/delete-confirmation-dialog"
+import { useToast } from "@/hooks/use-toast"
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -23,34 +25,44 @@ export default function TransactionsPage() {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
   const [isDetailsOpen, setIsDetailsOpen] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isClearAllDialogOpen, setIsClearAllDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null)
+  const { toast } = useToast()
 
   const transactionsPerPage = 20
 
   useEffect(() => {
-    async function fetchTransactions() {
-      try {
-        setLoading(true)
-        const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
-        const querySnapshot = await getDocs(transactionsQuery)
-        const transactionsData = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Transaction[]
-        setTransactions(transactionsData)
-        setFilteredTransactions(transactionsData)
-
-        // Set default selected month to the most recent month with transactions
-        if (transactionsData.length > 0 && !selectedMonth) {
-          const mostRecentDate = new Date(transactionsData[0].date)
-          const monthYear = `${mostRecentDate.getFullYear()}-${String(mostRecentDate.getMonth() + 1).padStart(2, "0")}`
-          setSelectedMonth(monthYear)
-        }
-      } catch (error) {
-        console.error("Error fetching transactions:", error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
     fetchTransactions()
   }, [selectedMonth])
+
+  async function fetchTransactions() {
+    try {
+      setLoading(true)
+      const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
+      const querySnapshot = await getDocs(transactionsQuery)
+      const transactionsData = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Transaction[]
+      setTransactions(transactionsData)
+      setFilteredTransactions(transactionsData)
+
+      // Set default selected month to the most recent month with transactions
+      if (transactionsData.length > 0 && !selectedMonth) {
+        const mostRecentDate = new Date(transactionsData[0].date)
+        const monthYear = `${mostRecentDate.getFullYear()}-${String(mostRecentDate.getMonth() + 1).padStart(2, "0")}`
+        setSelectedMonth(monthYear)
+      }
+    } catch (error) {
+      console.error("Error fetching transactions:", error)
+      toast({
+        title: "Error",
+        description: "Failed to load transactions. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
     let filtered = transactions
@@ -196,6 +208,94 @@ export default function TransactionsPage() {
     setIsDetailsOpen(true)
   }
 
+  const handleDeleteTransaction = (transaction: Transaction) => {
+    setTransactionToDelete(transaction)
+    setIsDeleteDialogOpen(true)
+  }
+
+  const confirmDeleteTransaction = async () => {
+    if (!transactionToDelete) return
+
+    try {
+      setIsDeleting(true)
+      await deleteDoc(doc(db, "transactions", transactionToDelete.id))
+
+      // Update local state
+      setTransactions(transactions.filter((t) => t.id !== transactionToDelete.id))
+
+      toast({
+        title: "Transaction deleted",
+        description: "The transaction has been successfully deleted.",
+      })
+    } catch (error) {
+      console.error("Error deleting transaction:", error)
+      toast({
+        title: "Error",
+        description: "Failed to delete transaction. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+      setIsDeleteDialogOpen(false)
+      setTransactionToDelete(null)
+    }
+  }
+
+  const handleClearAllTransactions = () => {
+    setIsClearAllDialogOpen(true)
+  }
+
+  const confirmClearAllTransactions = async () => {
+    try {
+      setIsDeleting(true)
+
+      // Get transactions to delete based on current filters
+      const transactionsToDelete = filteredTransactions
+
+      // Use batch write for better performance
+      const batch = writeBatch(db)
+
+      // Add each transaction to the batch
+      transactionsToDelete.forEach((transaction) => {
+        const transactionRef = doc(db, "transactions", transaction.id)
+        batch.delete(transactionRef)
+      })
+
+      // Commit the batch
+      await batch.commit()
+
+      // Update local state
+      if (viewMode === "folders" && selectedMonth) {
+        // If in folder view, only remove transactions from the selected month
+        const [year, month] = selectedMonth.split("-").map(Number)
+        setTransactions(
+          transactions.filter((transaction) => {
+            const date = new Date(transaction.date)
+            return !(date.getFullYear() === year && date.getMonth() + 1 === month)
+          }),
+        )
+      } else {
+        // If in all view, remove all transactions
+        setTransactions([])
+      }
+
+      toast({
+        title: "Transactions cleared",
+        description: `${transactionsToDelete.length} transactions have been successfully deleted.`,
+      })
+    } catch (error) {
+      console.error("Error clearing transactions:", error)
+      toast({
+        title: "Error",
+        description: "Failed to clear transactions. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+      setIsClearAllDialogOpen(false)
+    }
+  }
+
   function renderTransactionsTable() {
     if (loading) {
       return (
@@ -257,15 +357,26 @@ export default function TransactionsPage() {
                       ))}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleViewDetails(transaction)}
-                      title="View Details"
-                    >
-                      <Eye className="h-4 w-4" />
-                      <span className="sr-only">View Details</span>
-                    </Button>
+                    <div className="flex justify-end space-x-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleViewDetails(transaction)}
+                        title="View Details"
+                      >
+                        <Eye className="h-4 w-4" />
+                        <span className="sr-only">View Details</span>
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleDeleteTransaction(transaction)}
+                        title="Delete Transaction"
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                        <span className="sr-only">Delete Transaction</span>
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               )
@@ -303,6 +414,17 @@ export default function TransactionsPage() {
               <CardTitle>Transaction History</CardTitle>
               <CardDescription>View and manage all transactions</CardDescription>
             </div>
+            {filteredTransactions.length > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleClearAllTransactions}
+                className="flex items-center gap-1"
+              >
+                <Trash2 className="h-4 w-4" />
+                {viewMode === "folders" && selectedMonth ? "Clear Month" : "Clear All Transactions"}
+              </Button>
+            )}
           </div>
 
           <div className="mt-4 flex flex-col space-y-2 md:flex-row md:space-y-0 md:space-x-2">
@@ -384,6 +506,28 @@ export default function TransactionsPage() {
         transaction={selectedTransaction}
         isOpen={isDetailsOpen}
         onClose={() => setIsDetailsOpen(false)}
+      />
+
+      <DeleteConfirmationDialog
+        isOpen={isDeleteDialogOpen}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        onConfirm={confirmDeleteTransaction}
+        title="Delete Transaction"
+        description="Are you sure you want to delete this transaction? This action cannot be undone."
+        isDeleting={isDeleting}
+      />
+
+      <DeleteConfirmationDialog
+        isOpen={isClearAllDialogOpen}
+        onClose={() => setIsClearAllDialogOpen(false)}
+        onConfirm={confirmClearAllTransactions}
+        title={viewMode === "folders" && selectedMonth ? "Clear Month" : "Clear All Transactions"}
+        description={
+          viewMode === "folders" && selectedMonth
+            ? `Are you sure you want to delete all ${filteredTransactions.length} transactions from this month? This action cannot be undone.`
+            : `Are you sure you want to delete all ${filteredTransactions.length} transactions? This action cannot be undone.`
+        }
+        isDeleting={isDeleting}
       />
     </div>
   )
