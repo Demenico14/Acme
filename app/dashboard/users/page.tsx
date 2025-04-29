@@ -20,6 +20,8 @@ import {
   CheckCircle,
   XCircle,
   Clock,
+  Lock,
+  AlertTriangle,
 } from "lucide-react"
 
 import { db } from "@/lib/firebase"
@@ -54,7 +56,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Separator } from "@/components/ui/separator"
 import {
   Pagination,
@@ -65,10 +66,14 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 // Add the import at the top of the file
 import { createUserWithAdmin } from "@/app/actions/user-actions"
 import { createUserWithClientSDK } from "@/app/actions/user-actions"
+import { generateSecurePassword } from "@/lib/password-generator"
+import { sendWelcomeEmail } from "@/lib/email-service"
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
@@ -86,6 +91,10 @@ export default function UsersPage() {
   const [totalPages, setTotalPages] = useState(1)
   const [showPassword, setShowPassword] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
+  const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [sendWelcomeEmailEnabled, setSendWelcomeEmailEnabled] = useState(true)
+  const [generatedPassword, setGeneratedPassword] = useState("")
+  const [useGeneratedPassword, setUseGeneratedPassword] = useState(true)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const itemsPerPage = 10
   const { toast } = useToast()
@@ -115,6 +124,16 @@ export default function UsersPage() {
   // Password confirmation state
   const [passwordConfirm, setPasswordConfirm] = useState("")
   const [passwordError, setPasswordError] = useState("")
+
+  // Generate a secure password when the dialog opens
+  useEffect(() => {
+    if (isAddDialogOpen && useGeneratedPassword) {
+      const password = generateSecurePassword(8)
+      setGeneratedPassword(password)
+      setNewUserData((prev) => ({ ...prev, password }))
+      setPasswordConfirm(password)
+    }
+  }, [isAddDialogOpen, useGeneratedPassword])
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -194,6 +213,11 @@ export default function UsersPage() {
     } else {
       setNewUserData((prev) => ({ ...prev, [name]: value }))
     }
+
+    // If manually changing password, update password confirm to match
+    if (name === "password" && !useGeneratedPassword) {
+      setPasswordConfirm(value)
+    }
   }
 
   function handleSelectChange(name: string, value: string) {
@@ -213,6 +237,13 @@ export default function UsersPage() {
 
     setPasswordError("")
     return true
+  }
+
+  function handleGenerateNewPassword() {
+    const password = generateSecurePassword(8)
+    setGeneratedPassword(password)
+    setNewUserData((prev) => ({ ...prev, password }))
+    setPasswordConfirm(password)
   }
 
   async function handleProfileImageUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -291,6 +322,41 @@ export default function UsersPage() {
           title: "Success",
           description: "User added successfully",
         })
+
+        // Send welcome email if enabled
+        if (sendWelcomeEmailEnabled) {
+          setIsSendingEmail(true)
+          try {
+            const emailResult = await sendWelcomeEmail(
+              newUserData.name,
+              newUserData.email,
+              newUserData.password,
+              newUserData.role,
+            )
+
+            if (emailResult.success) {
+              toast({
+                title: "Email Sent",
+                description: "Welcome email with login instructions sent successfully",
+              })
+            } else {
+              toast({
+                title: "Email Warning",
+                description: `User created but email failed: ${emailResult.message}`,
+                variant: "warning",
+              })
+            }
+          } catch (emailError) {
+            console.error("Error sending welcome email:", emailError)
+            toast({
+              title: "Email Error",
+              description: "User created but failed to send welcome email",
+              variant: "warning",
+            })
+          } finally {
+            setIsSendingEmail(false)
+          }
+        }
 
         // Reset form and close dialog
         setIsAddDialogOpen(false)
@@ -460,13 +526,13 @@ export default function UsersPage() {
     switch (status) {
       case "active":
         return (
-          <Badge variant="default" className="bg-green-500">
+          <Badge variant="success">
             <CheckCircle className="mr-1 h-3 w-3" /> Active
           </Badge>
         )
       case "inactive":
         return (
-          <Badge variant="secondary" className="bg-red-500">
+          <Badge variant="destructive">
             <XCircle className="mr-1 h-3 w-3" /> Inactive
           </Badge>
         )
@@ -588,7 +654,9 @@ export default function UsersPage() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar>
-                            {user.profileImageUrl ? <AvatarImage src={user.profileImageUrl} alt={user.name} /> : null}
+                            {user.profileImageUrl ? (
+                              <AvatarImage src={user.profileImageUrl || "/placeholder.svg"} alt={user.name} />
+                            ) : null}
                             <AvatarFallback>{user.name.substring(0, 2).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <div>
@@ -762,40 +830,104 @@ export default function UsersPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col md:flex-row gap-4">
-                  <div className="flex-1 space-y-2">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
                     <Label htmlFor="password">Password *</Label>
-                    <div className="relative">
-                      <Input
-                        id="password"
-                        name="password"
-                        type={showPassword ? "text" : "password"}
-                        value={newUserData.password}
-                        onChange={handleNewUserInputChange}
-                        required
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor="useGeneratedPassword" className="text-sm font-normal">
+                        Auto-generate secure password
+                      </Label>
+                      <Switch
+                        id="useGeneratedPassword"
+                        checked={useGeneratedPassword}
+                        onCheckedChange={setUseGeneratedPassword}
                       />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-full"
-                        onClick={() => setShowPassword(!showPassword)}
-                      >
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
                     </div>
                   </div>
 
-                  <div className="flex-1 space-y-2">
-                    <Label htmlFor="passwordConfirm">Confirm Password *</Label>
-                    <Input
-                      id="passwordConfirm"
-                      type={showPassword ? "text" : "password"}
-                      value={passwordConfirm}
-                      onChange={(e) => setPasswordConfirm(e.target.value)}
-                      required
-                    />
-                  </div>
+                  {useGeneratedPassword ? (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Input
+                          id="password"
+                          name="password"
+                          type={showPassword ? "text" : "password"}
+                          value={generatedPassword}
+                          readOnly
+                          className="pr-24"
+                        />
+                        <div className="absolute right-0 top-0 h-full flex">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="h-full"
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </Button>
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={handleGenerateNewPassword}
+                                  className="h-full"
+                                >
+                                  <RefreshCw className="h-4 w-4 mr-1" />
+                                  New
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Generate new password</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Lock className="h-3 w-3" />
+                        <span>Secure 8-character password with uppercase, lowercase, numbers, and symbols</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col md:flex-row gap-4">
+                      <div className="flex-1 space-y-2">
+                        <div className="relative">
+                          <Input
+                            id="password"
+                            name="password"
+                            type={showPassword ? "text" : "password"}
+                            value={newUserData.password}
+                            onChange={handleNewUserInputChange}
+                            required
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0 h-full"
+                            onClick={() => setShowPassword(!showPassword)}
+                          >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 space-y-2">
+                        <Label htmlFor="passwordConfirm">Confirm Password *</Label>
+                        <Input
+                          id="passwordConfirm"
+                          type={showPassword ? "text" : "password"}
+                          value={passwordConfirm}
+                          onChange={(e) => setPasswordConfirm(e.target.value)}
+                          required
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {passwordError && <div className="text-sm text-destructive">{passwordError}</div>}
@@ -855,7 +987,7 @@ export default function UsersPage() {
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
                       {newUserData.profileImageUrl ? (
-                        <AvatarImage src={newUserData.profileImageUrl} alt="Profile" />
+                        <AvatarImage src={newUserData.profileImageUrl || "/placeholder.svg"} alt="Profile" />
                       ) : null}
                       <AvatarFallback>
                         {newUserData.name ? newUserData.name.substring(0, 2).toUpperCase() : "U"}
@@ -967,14 +1099,47 @@ export default function UsersPage() {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-2">
-                    <Checkbox id="sendWelcomeEmail" />
-                    <Label htmlFor="sendWelcomeEmail">Send welcome email</Label>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label htmlFor="sendWelcomeEmail" className="text-base">
+                        Send Welcome Email
+                      </Label>
+                      <p className="text-sm text-muted-foreground">Send an email with login instructions to the user</p>
+                    </div>
+                    <Switch
+                      id="sendWelcomeEmail"
+                      checked={sendWelcomeEmailEnabled}
+                      onCheckedChange={setSendWelcomeEmailEnabled}
+                    />
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    The user will receive an email with login instructions.
-                  </p>
+
+                  {sendWelcomeEmailEnabled && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950">
+                      <div className="flex items-start gap-3">
+                        <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                        <div>
+                          <h4 className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                            Email Configuration Required
+                          </h4>
+                          <div className="mt-1 text-sm text-amber-700 dark:text-amber-400">
+                            <p>
+                              Before using this feature, please configure EmailJS by updating the following in the
+                              <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 dark:bg-amber-900">
+                                email-service.ts
+                              </code>
+                              file:
+                            </p>
+                            <ul className="mt-2 list-disc pl-5 space-y-1">
+                              <li>Your EmailJS User ID</li>
+                              <li>Your EmailJS Service ID</li>
+                              <li>Your EmailJS Template ID</li>
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </TabsContent>
             </Tabs>
@@ -983,7 +1148,16 @@ export default function UsersPage() {
               <Button type="button" variant="outline" onClick={() => setIsAddDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Create User</Button>
+              <Button type="submit" disabled={isSendingEmail}>
+                {isSendingEmail ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Creating User...
+                  </>
+                ) : (
+                  "Create User"
+                )}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -1087,7 +1261,7 @@ export default function UsersPage() {
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
                       {newUserData.profileImageUrl ? (
-                        <AvatarImage src={newUserData.profileImageUrl} alt="Profile" />
+                        <AvatarImage src={newUserData.profileImageUrl || "/placeholder.svg"} alt="Profile" />
                       ) : null}
                       <AvatarFallback>
                         {newUserData.name ? newUserData.name.substring(0, 2).toUpperCase() : "U"}
@@ -1235,7 +1409,7 @@ export default function UsersPage() {
                 <div className="flex flex-col items-center gap-4">
                   <Avatar className="h-24 w-24">
                     {currentUser.profileImageUrl ? (
-                      <AvatarImage src={currentUser.profileImageUrl} alt={currentUser.name} />
+                      <AvatarImage src={currentUser.profileImageUrl || "/placeholder.svg"} alt={currentUser.name} />
                     ) : null}
                     <AvatarFallback className="text-xl">
                       {currentUser.name.substring(0, 2).toUpperCase()}
@@ -1350,4 +1524,3 @@ export default function UsersPage() {
     </div>
   )
 }
-
