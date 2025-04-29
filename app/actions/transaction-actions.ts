@@ -89,7 +89,7 @@ export async function validateTransaction(transaction: Partial<Transaction>) {
       id: doc.id,
       ...doc.data(),
     })) as Transaction[]
-    \
+    
       .filter(t => new Date(t.date) >= new Date(twoMinutesAgo))
 
     // Check if this transaction would be a duplicate
