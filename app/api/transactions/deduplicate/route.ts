@@ -1,9 +1,9 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 import { adminDb } from "@/lib/firebase-admin"
 import { findDuplicateTransactions } from "@/lib/transaction-utils"
 import type { Transaction } from "@/types"
 
-export async function POST(request: NextRequest) {
+export async function POST() {
   try {
     // Get all transactions
     const transactionsRef = adminDb.collection("transactions")
