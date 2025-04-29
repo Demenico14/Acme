@@ -109,7 +109,8 @@ export default function TransactionsPage() {
         })
 
         // Keep the first transaction (most recent), delete the rest
-        const [_keep, ...duplicatesToDelete] = group // Use _keep to indicate we're not using this variable
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const [keep, ...duplicatesToDelete] = group
 
         duplicatesToDelete.forEach((duplicate) => {
           batch.delete(doc(db, "transactions", duplicate.id))
