@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, type FieldValue } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2 } from "lucide-react"
 import type { Transaction } from "@/types"
@@ -27,6 +27,30 @@ interface AddTransactionDialogProps {
   isOpen: boolean
   onClose: () => void
   onTransactionAdded: (transaction: Transaction) => void
+}
+
+// Define a type for the transaction data we're sending to Firestore
+interface TransactionData {
+  gasType: string
+  kgs: number
+  paymentMethod: string
+  total: number
+  currency: string
+  date: string
+  createdAt: FieldValue
+  reason?: string
+  isRestock?: boolean
+  customerName?: string
+  phoneNumber?: string
+  dueDate?: string
+  paid?: boolean
+  paidDate?: string
+  cardDetails?: {
+    cardType?: string
+    cardNumber?: string
+    nameOnCard?: string
+    expiryDate?: string
+  }
 }
 
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
@@ -104,7 +128,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       setIsSubmitting(true)
 
       // Prepare transaction data
-      const transactionData: any = {
+      const transactionData: TransactionData = {
         gasType,
         kgs: Number.parseFloat(quantity),
         paymentMethod,
@@ -134,7 +158,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         if (expiryDate) cardDetails.expiryDate = expiryDate
 
         if (Object.keys(cardDetails).length > 0) {
-          transactionData.cardDetails = cardDetails
+          transactionData.cardDetails = cardDetails as TransactionData["cardDetails"]
         }
       }
 
