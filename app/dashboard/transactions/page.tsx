@@ -50,7 +50,6 @@ export default function TransactionsPage() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const addButtonClickedRef = useRef(false)
   const [duplicatesFound, setDuplicatesFound] = useState(false)
-  const [isDeletingDuplicates, setIsDeletingDuplicates] = useState(false)
   const [duplicateGroups, setDuplicateGroups] = useState<Transaction[][]>([])
   const [isDeduplicating, setIsDeduplicating] = useState(false)
 

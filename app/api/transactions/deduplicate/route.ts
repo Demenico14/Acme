@@ -1,13 +1,13 @@
-import { db } from "@/lib/firebase-admin"
+import { adminDb } from "@/lib/firebase-admin"
 import { findDuplicateTransactions } from "@/lib/transaction-utils"
 import type { Transaction } from "@/types"
 import { doc, getDoc, getDocs, collection, query, orderBy, writeBatch } from "firebase/firestore"
-import { type NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 
-export async function POST(req: NextRequest) {
+export async function POST() {
   try {
     // Get all transactions
-    const transactionsRef = collection(db, "transactions")
+    const transactionsRef = collection(adminDb, "transactions")
     const transactionsQuery = query(transactionsRef, orderBy("date", "asc"))
     const querySnapshot = await getDocs(transactionsQuery)
 
@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     // For each group, keep the earliest transaction and delete the rest
-    const batch = writeBatch(db)
+    const batch = writeBatch(adminDb)
     let removedCount = 0
 
     for (const group of duplicateGroups) {
@@ -36,11 +36,12 @@ export async function POST(req: NextRequest) {
       group.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
       // Keep the earliest transaction, delete the rest
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const [keep, ...duplicatesToRemove] = group
 
       for (const duplicate of duplicatesToRemove) {
         // Verify the transaction still exists before deleting
-        const docRef = doc(db, "transactions", duplicate.id)
+        const docRef = doc(adminDb, "transactions", duplicate.id)
         const docSnap = await getDoc(docRef)
 
         if (docSnap.exists()) {

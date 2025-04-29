@@ -86,6 +86,7 @@ export function filterDuplicateTransactions(
     group.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
     // Keep the earliest transaction, mark the rest for removal
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [keep, ...remove] = group
     remove.forEach((transaction) => idsToRemove.add(transaction.id))
   })

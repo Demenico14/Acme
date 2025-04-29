@@ -1,6 +1,6 @@
 "use server"
 
-import { db } from "@/lib/firebase-admin"
+import { adminDb } from "@/lib/firebase-admin"
 import { findDuplicateTransactions } from "@/lib/transaction-utils"
 import type { Transaction } from "@/types"
 import { collection, getDocs, query, orderBy, writeBatch, doc, getDoc } from "firebase/firestore"
@@ -11,7 +11,7 @@ import { collection, getDocs, query, orderBy, writeBatch, doc, getDoc } from "fi
 export async function deduplicateTransactions() {
   try {
     // Get all transactions
-    const transactionsRef = collection(db, "transactions")
+    const transactionsRef = collection(adminDb, "transactions")
     const transactionsQuery = query(transactionsRef, orderBy("date", "asc"))
     const querySnapshot = await getDocs(transactionsQuery)
 
@@ -32,7 +32,7 @@ export async function deduplicateTransactions() {
     }
 
     // For each group, keep the earliest transaction and delete the rest
-    const batch = writeBatch(db)
+    const batch = writeBatch(adminDb)
     let removedCount = 0
 
     for (const group of duplicateGroups) {
@@ -40,11 +40,12 @@ export async function deduplicateTransactions() {
       group.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
 
       // Keep the earliest transaction, delete the rest
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const [keep, ...duplicatesToRemove] = group
 
       for (const duplicate of duplicatesToRemove) {
         // Verify the transaction still exists before deleting
-        const docRef = doc(db, "transactions", duplicate.id)
+        const docRef = doc(adminDb, "transactions", duplicate.id)
         const docSnap = await getDoc(docRef)
 
         if (docSnap.exists()) {
@@ -81,7 +82,7 @@ export async function validateTransaction(transaction: Partial<Transaction>) {
     // Get recent transactions from the last 2 minutes
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString()
 
-    const transactionsRef = collection(db, "transactions")
+    const transactionsRef = collection(adminDb, "transactions")
     const transactionsQuery = query(transactionsRef, orderBy("date", "desc"))
 
     const querySnapshot = await getDocs(transactionsQuery)
