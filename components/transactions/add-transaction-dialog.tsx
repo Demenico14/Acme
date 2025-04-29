@@ -17,14 +17,16 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { db } from "@/lib/firebase"
 import { collection, addDoc, serverTimestamp, getDocs, query } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, AlertCircle } from "lucide-react"
+import { Loader2, AlertCircle, Calculator, Edit } from "lucide-react"
 import type { Transaction } from "@/types"
 import { recordGasConsumption } from "@/lib/stock-service"
 import { useAuth } from "@/context/auth-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 interface AddTransactionDialogProps {
   isOpen: boolean
@@ -49,6 +51,7 @@ interface FirestoreTransactionData {
   paid?: boolean
   paidDate?: string
   cardDetails?: Record<string, string>
+  priceType: "suggested" | "custom"
 }
 
 interface StockItem {
@@ -68,16 +71,18 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [stockError, setStockError] = useState<string | null>(null)
   const [insufficientStock, setInsufficientStock] = useState(false)
   const [availableStock, setAvailableStock] = useState<number | null>(null)
+  const [priceType, setPriceType] = useState<"suggested" | "custom">("suggested")
+  const [transactionType, setTransactionType] = useState<"sale" | "restock">("sale")
 
   // Basic transaction fields
   const [gasType, setGasType] = useState("")
   const [quantity, setQuantity] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("Cash")
   const [total, setTotal] = useState("")
+  const [suggestedPrice, setSuggestedPrice] = useState("")
   const [currency, setCurrency] = useState("KES")
   const [date, setDate] = useState<Date>(new Date())
   const [reason, setReason] = useState("")
-  const [isRestock, setIsRestock] = useState(false)
 
   // Credit transaction fields
   const [customerName, setCustomerName] = useState("")
@@ -93,6 +98,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [expiryDate, setExpiryDate] = useState("")
 
   const isCredit = paymentMethod === "Credit"
+  const isRestock = transactionType === "restock"
 
   // Fetch stock items when the dialog opens
   useEffect(() => {
@@ -109,7 +115,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       setInsufficientStock(false)
       setAvailableStock(null)
     }
-  }, [gasType, quantity])
+  }, [gasType, quantity, transactionType])
 
   // Fetch all stock items from Firestore
   const fetchStockItems = async () => {
@@ -156,18 +162,31 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     } else {
       setInsufficientStock(false)
     }
+
+    // Calculate suggested price
+    const calculatedPrice = stockItem.price * requestedQuantity
+    setSuggestedPrice(calculatedPrice.toFixed(2))
+
+    // If using suggested price, update the total
+    if (priceType === "suggested") {
+      setTotal(calculatedPrice.toFixed(2))
+    }
   }
 
   const resetForm = () => {
+    // Reset transaction type
+    setTransactionType("sale")
+    setPriceType("suggested")
+
     // Reset basic fields
     setGasType("")
     setQuantity("")
     setPaymentMethod("Cash")
     setTotal("")
+    setSuggestedPrice("")
     setCurrency("KES")
     setDate(new Date())
     setReason("")
-    setIsRestock(false)
 
     // Reset credit fields
     setCustomerName("")
@@ -238,11 +257,12 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         total: Number.parseFloat(total),
         currency,
         date: date.toISOString(),
+        isRestock,
+        priceType,
       }
 
       // Add optional fields if they exist
       if (reason) firestoreData.reason = reason
-      if (isRestock) firestoreData.isRestock = isRestock
 
       // Add credit-specific fields if payment method is credit
       if (isCredit) {
@@ -310,7 +330,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
       toast({
         title: "Transaction added",
-        description: "The transaction has been successfully added and stock updated.",
+        description: `The ${isRestock ? "restock" : "sale"} transaction has been successfully added${!isRestock ? " and stock updated" : ""}.`,
       })
 
       // Close the dialog and reset form
@@ -326,27 +346,6 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
       setIsSubmitting(false)
     }
   }
-
-  // Calculate the suggested price based on the selected gas type and quantity
-  const calculateSuggestedPrice = () => {
-    if (!gasType || !quantity) return ""
-
-    const stockItem = stockItems.find((item) => item.gasType === gasType)
-    if (!stockItem) return ""
-
-    const requestedQuantity = Number.parseFloat(quantity)
-    const suggestedPrice = stockItem.price * requestedQuantity
-
-    return suggestedPrice.toFixed(2)
-  }
-
-  // Update total when gas type or quantity changes
-  useEffect(() => {
-    const suggestedPrice = calculateSuggestedPrice()
-    if (suggestedPrice) {
-      setTotal(suggestedPrice)
-    }
-  }, [gasType, quantity])
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -369,25 +368,20 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           </Alert>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Is Restock */}
-              <div className="flex items-center space-x-2 md:col-span-2">
-                <Checkbox
-                  id="isRestock"
-                  checked={isRestock}
-                  onCheckedChange={(checked) => {
-                    setIsRestock(checked === true)
-                    // Reset insufficient stock warning when toggling restock
-                    if (checked === true) {
-                      setInsufficientStock(false)
-                    } else {
-                      checkStockAvailability()
-                    }
-                  }}
-                />
-                <Label htmlFor="isRestock">This is a restock transaction</Label>
-              </div>
+            {/* Transaction Type Tabs */}
+            <Tabs
+              defaultValue="sale"
+              value={transactionType}
+              onValueChange={(value) => setTransactionType(value as "sale" | "restock")}
+              className="w-full"
+            >
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="sale">Sale Transaction</TabsTrigger>
+                <TabsTrigger value="restock">Restock Transaction</TabsTrigger>
+              </TabsList>
+            </Tabs>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Gas Type */}
               <div className="space-y-2">
                 <Label htmlFor="gasType">Gas Type *</Label>
@@ -409,7 +403,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                     )}
                   </SelectContent>
                 </Select>
-                {availableStock !== null && (
+                {availableStock !== null && !isRestock && (
                   <p className="text-xs text-muted-foreground mt-1">Available: {availableStock.toFixed(2)} kgs</p>
                 )}
               </div>
@@ -428,12 +422,43 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                   required
                   className={insufficientStock ? "border-destructive" : ""}
                 />
-                {insufficientStock && (
+                {insufficientStock && !isRestock && (
                   <p className="text-xs text-destructive">
                     Insufficient stock. Available: {availableStock?.toFixed(2)} kgs
                   </p>
                 )}
               </div>
+
+              {/* Price Type Selection - only show for sales */}
+              {!isRestock && (
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Price Type</Label>
+                  <RadioGroup
+                    value={priceType}
+                    onValueChange={(value) => {
+                      setPriceType(value as "suggested" | "custom")
+                      // If switching to suggested, update the total with the suggested price
+                      if (value === "suggested" && suggestedPrice) {
+                        setTotal(suggestedPrice)
+                      }
+                    }}
+                    className="flex space-x-4"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="suggested" id="suggested" />
+                      <Label htmlFor="suggested" className="flex items-center">
+                        <Calculator className="h-4 w-4 mr-1" /> Suggested Price
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="custom" id="custom" />
+                      <Label htmlFor="custom" className="flex items-center">
+                        <Edit className="h-4 w-4 mr-1" /> Custom Price
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+              )}
 
               {/* Payment Method */}
               <div className="space-y-2">
@@ -463,10 +488,12 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                   value={total}
                   onChange={(e) => setTotal(e.target.value)}
                   required
+                  disabled={priceType === "suggested" && !isRestock}
+                  className={priceType === "suggested" && !isRestock ? "bg-muted" : ""}
                 />
-                {gasType && quantity && (
+                {gasType && quantity && !isRestock && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Suggested price: {calculateSuggestedPrice()} {currency}
+                    Suggested price: {suggestedPrice || "0.00"} {currency}
                   </p>
                 )}
               </div>
@@ -501,7 +528,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
             </div>
 
             {/* Credit-specific fields */}
-            {isCredit && (
+            {isCredit && !isRestock && (
               <>
                 <div className="mt-6 border-t pt-4">
                   <h3 className="text-lg font-medium mb-4">Credit Details</h3>
@@ -596,14 +623,21 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
               <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSubmitting || (!isRestock && insufficientStock)}>
+              <Button
+                type="submit"
+                disabled={
+                  isSubmitting ||
+                  (!isRestock && insufficientStock) ||
+                  (!isRestock && priceType === "suggested" && !suggestedPrice)
+                }
+              >
                 {isSubmitting ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     Adding...
                   </>
                 ) : (
-                  "Add Transaction"
+                  `Add ${isRestock ? "Restock" : "Sale"} Transaction`
                 )}
               </Button>
             </DialogFooter>
