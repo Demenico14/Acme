@@ -6,7 +6,19 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useState, useEffect, useCallback } from "react"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, getDocs, query, orderBy, doc, getDoc, updateDoc } from "firebase/firestore"
+import {
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  orderBy,
+  doc,
+  getDoc,
+  updateDoc,
+  serverTimestamp,
+  type FieldValue,
+  type Timestamp,
+} from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { DatePicker } from "@/components/ui/date-picker"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -38,7 +50,7 @@ interface TransactionData {
   currency: string
   paymentMethod: string
   date: string
-  createdAt: string
+  createdAt: FieldValue | Timestamp // Using proper Firebase types
   isRestock?: boolean
   reason?: string
   // Credit transaction fields
@@ -120,9 +132,6 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     }
   }, [isOpen, fetchStockItems])
 
-  // Check stock availability when quantity changes
-
-  // Update calculated total when price or quantity changes
   useEffect(() => {
     const newCalculatedTotal = price * quantity
     setCalculatedTotal(newCalculatedTotal)
@@ -413,7 +422,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         currency,
         paymentMethod,
         date: date.toISOString(),
-        createdAt: new Date().toISOString(),
+        createdAt: serverTimestamp(),
         idempotencyKey: generateIdempotencyKey(),
         clientTimestamp: Date.now(),
         sessionId,

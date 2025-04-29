@@ -1,3 +1,5 @@
+import { FieldValue, Timestamp } from "firebase/firestore"
+
 export interface StockItem {
   id: string
   gasType: string
@@ -25,7 +27,7 @@ export interface StockAttachment {
 }
 
 export interface Transaction {
-  createdAt: string
+  createdAt: string | FieldValue | Timestamp
   currency: string
   date: string
   gasType: string
