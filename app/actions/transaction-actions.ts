@@ -88,9 +88,7 @@ export async function validateTransaction(transaction: Partial<Transaction>) {
     const recentTransactions = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    })) as Transaction[]
-    
-      .filter(t => new Date(t.date) >= new Date(twoMinutesAgo))
+    })) as Transaction[].filter(t => new Date(t.date) >= new Date(twoMinutesAgo))
 
     // Check if this transaction would be a duplicate
     for (const existingTransaction of recentTransactions) {
