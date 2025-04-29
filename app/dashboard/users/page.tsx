@@ -70,6 +70,34 @@ import {
 import { createUserWithAdmin } from "@/app/actions/user-actions"
 import { createUserWithClientSDK } from "@/app/actions/user-actions"
 
+// Add this function after the existing imports
+function generateSecurePassword(length = 8) {
+  const uppercase = "ABCDEFGHJKLMNPQRSTUVWXYZ" // Removed confusing characters like I and O
+  const lowercase = "abcdefghijkmnopqrstuvwxyz" // Removed confusing characters like l
+  const numbers = "23456789" // Removed confusing characters like 0 and 1
+  const special = "!@#$%^&*_-+="
+
+  const allChars = uppercase + lowercase + numbers + special
+  let password = ""
+
+  // Ensure at least one character from each category
+  password += uppercase.charAt(Math.floor(Math.random() * uppercase.length))
+  password += lowercase.charAt(Math.floor(Math.random() * lowercase.length))
+  password += numbers.charAt(Math.floor(Math.random() * numbers.length))
+  password += special.charAt(Math.floor(Math.random() * special.length))
+
+  // Fill the rest of the password
+  for (let i = 4; i < length; i++) {
+    password += allChars.charAt(Math.floor(Math.random() * allChars.length))
+  }
+
+  // Shuffle the password characters
+  return password
+    .split("")
+    .sort(() => 0.5 - Math.random())
+    .join("")
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [filteredUsers, setFilteredUsers] = useState<User[]>([])
@@ -588,7 +616,9 @@ export default function UsersPage() {
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar>
-                            {user.profileImageUrl ? <AvatarImage src={user.profileImageUrl} alt={user.name} /> : null}
+                            {user.profileImageUrl ? (
+                              <AvatarImage src={user.profileImageUrl || "/placeholder.svg"} alt={user.name} />
+                            ) : null}
                             <AvatarFallback>{user.name.substring(0, 2).toUpperCase()}</AvatarFallback>
                           </Avatar>
                           <div>
@@ -774,15 +804,31 @@ export default function UsersPage() {
                         onChange={handleNewUserInputChange}
                         required
                       />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-full"
-                        onClick={() => setShowPassword(!showPassword)}
-                      >
-                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </Button>
+                      <div className="absolute right-0 top-0 h-full flex">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-full px-2 text-xs"
+                          onClick={() => {
+                            const password = generateSecurePassword()
+                            setNewUserData((prev) => ({ ...prev, password }))
+                            setPasswordConfirm(password)
+                            setShowPassword(true)
+                          }}
+                        >
+                          Generate
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-full"
+                          onClick={() => setShowPassword(!showPassword)}
+                        >
+                          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </Button>
+                      </div>
                     </div>
                   </div>
 
@@ -855,7 +901,7 @@ export default function UsersPage() {
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
                       {newUserData.profileImageUrl ? (
-                        <AvatarImage src={newUserData.profileImageUrl} alt="Profile" />
+                        <AvatarImage src={newUserData.profileImageUrl || "/placeholder.svg"} alt="Profile" />
                       ) : null}
                       <AvatarFallback>
                         {newUserData.name ? newUserData.name.substring(0, 2).toUpperCase() : "U"}
@@ -1087,7 +1133,7 @@ export default function UsersPage() {
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
                       {newUserData.profileImageUrl ? (
-                        <AvatarImage src={newUserData.profileImageUrl} alt="Profile" />
+                        <AvatarImage src={newUserData.profileImageUrl || "/placeholder.svg"} alt="Profile" />
                       ) : null}
                       <AvatarFallback>
                         {newUserData.name ? newUserData.name.substring(0, 2).toUpperCase() : "U"}
@@ -1235,7 +1281,7 @@ export default function UsersPage() {
                 <div className="flex flex-col items-center gap-4">
                   <Avatar className="h-24 w-24">
                     {currentUser.profileImageUrl ? (
-                      <AvatarImage src={currentUser.profileImageUrl} alt={currentUser.name} />
+                      <AvatarImage src={currentUser.profileImageUrl || "/placeholder.svg"} alt={currentUser.name} />
                     ) : null}
                     <AvatarFallback className="text-xl">
                       {currentUser.name.substring(0, 2).toUpperCase()}
@@ -1350,4 +1396,3 @@ export default function UsersPage() {
     </div>
   )
 }
-
