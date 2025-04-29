@@ -1,7 +1,18 @@
 "use client"
 import { db } from "@/lib/firebase"
 import { collection, deleteDoc, doc, getDocs, orderBy, query, writeBatch } from "firebase/firestore"
-import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye, Trash2, Plus } from "lucide-react"
+import {
+  Search,
+  ShoppingCart,
+  Calendar,
+  ChevronRight,
+  FolderOpen,
+  CreditCard,
+  Eye,
+  Trash2,
+  Plus,
+  RefreshCw,
+} from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useCallback, useEffect, useState } from "react"
@@ -64,7 +75,7 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     fetchTransactions()
-  }, [selectedMonth, fetchTransactions])
+  }, [fetchTransactions])
 
   useEffect(() => {
     let filtered = transactions
@@ -341,10 +352,14 @@ export default function TransactionsPage() {
           <TableBody>
             {currentTransactions.map((transaction) => {
               const isCredit = transaction.paymentMethod?.toLowerCase() === "credit"
+              const isRestock = transaction.isRestock === true
               return (
                 <TableRow key={transaction.id}>
                   <TableCell className="font-medium">{transaction.id}</TableCell>
-                  <TableCell>{transaction.kgs.toFixed(2)}</TableCell>
+                  <TableCell>
+                    {transaction.kgs.toFixed(2)}
+                    {isRestock && <RefreshCw className="ml-1 h-3 w-3 inline text-green-500" />}
+                  </TableCell>
                   <TableCell>
                     <div className="flex items-center">
                       {transaction.paymentMethod}
@@ -362,6 +377,7 @@ export default function TransactionsPage() {
                       ) : (
                         <Badge variant="destructive">Unpaid</Badge>
                       ))}
+                    {isRestock && <Badge variant="outline">Restock</Badge>}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end space-x-1">
@@ -401,9 +417,6 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold tracking-tight">Transactions</h2>
         <div className="flex space-x-2">
-          <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
-            <Plus className="h-4 w-4 mr-1" /> Add Transaction
-          </Button>
           <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
             <Plus className="h-4 w-4 mr-1" /> Add Transaction
           </Button>

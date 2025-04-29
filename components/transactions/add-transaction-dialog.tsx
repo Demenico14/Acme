@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   Dialog,
   DialogContent,
@@ -18,10 +18,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, getDocs, query } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2 } from "lucide-react"
+import { Loader2, AlertCircle } from "lucide-react"
 import type { Transaction } from "@/types"
+import { recordGasConsumption } from "@/lib/stock-service"
+import { useAuth } from "@/context/auth-context"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 interface AddTransactionDialogProps {
   isOpen: boolean
@@ -48,9 +51,23 @@ interface FirestoreTransactionData {
   cardDetails?: Record<string, string>
 }
 
+interface StockItem {
+  id: string
+  gasType: string
+  price: number
+  stock: number
+  lastUpdated: string
+}
+
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
   const { toast } = useToast()
+  const { user } = useAuth()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [stockItems, setStockItems] = useState<StockItem[]>([])
+  const [stockLoading, setStockLoading] = useState(true)
+  const [stockError, setStockError] = useState<string | null>(null)
+  const [insufficientStock, setInsufficientStock] = useState(false)
+  const [availableStock, setAvailableStock] = useState<number | null>(null)
 
   // Basic transaction fields
   const [gasType, setGasType] = useState("")
@@ -77,6 +94,70 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
   const isCredit = paymentMethod === "Credit"
 
+  // Fetch stock items when the dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchStockItems()
+    }
+  }, [isOpen])
+
+  // Check stock availability when gas type or quantity changes
+  useEffect(() => {
+    if (gasType && quantity) {
+      checkStockAvailability()
+    } else {
+      setInsufficientStock(false)
+      setAvailableStock(null)
+    }
+  }, [gasType, quantity])
+
+  // Fetch all stock items from Firestore
+  const fetchStockItems = async () => {
+    try {
+      setStockLoading(true)
+      setStockError(null)
+
+      const stockQuery = query(collection(db, "stock"))
+      const querySnapshot = await getDocs(stockQuery)
+      const stockData = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as StockItem[]
+
+      setStockItems(stockData)
+    } catch (error) {
+      console.error("Error fetching stock items:", error)
+      setStockError("Failed to load stock data. Please try again.")
+    } finally {
+      setStockLoading(false)
+    }
+  }
+
+  // Check if there's enough stock for the selected gas type and quantity
+  const checkStockAvailability = () => {
+    if (!gasType || !quantity || isRestock) {
+      setInsufficientStock(false)
+      setAvailableStock(null)
+      return
+    }
+
+    const stockItem = stockItems.find((item) => item.gasType === gasType)
+    if (!stockItem) {
+      setInsufficientStock(true)
+      setAvailableStock(0)
+      return
+    }
+
+    const requestedQuantity = Number.parseFloat(quantity)
+    setAvailableStock(stockItem.stock)
+
+    if (requestedQuantity > stockItem.stock) {
+      setInsufficientStock(true)
+    } else {
+      setInsufficientStock(false)
+    }
+  }
+
   const resetForm = () => {
     // Reset basic fields
     setGasType("")
@@ -100,6 +181,10 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     setCardNumber("")
     setNameOnCard("")
     setExpiryDate("")
+
+    // Reset stock check
+    setInsufficientStock(false)
+    setAvailableStock(null)
   }
 
   const handleClose = () => {
@@ -117,6 +202,29 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         variant: "destructive",
       })
       return
+    }
+
+    // Check stock availability again before submitting
+    if (!isRestock) {
+      const stockItem = stockItems.find((item) => item.gasType === gasType)
+      if (!stockItem) {
+        toast({
+          title: "Stock not found",
+          description: `No stock found for ${gasType}. Please check the gas type.`,
+          variant: "destructive",
+        })
+        return
+      }
+
+      const requestedQuantity = Number.parseFloat(quantity)
+      if (requestedQuantity > stockItem.stock) {
+        toast({
+          title: "Insufficient stock",
+          description: `Not enough ${gasType} in stock. Available: ${stockItem.stock.toFixed(2)} kgs`,
+          variant: "destructive",
+        })
+        return
+      }
     }
 
     try {
@@ -170,12 +278,39 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         createdAt: new Date().toISOString(),
       }
 
+      // Update stock quantity if this is not a restock transaction
+      if (!isRestock) {
+        const stockItem = stockItems.find((item) => item.gasType === gasType)
+        if (stockItem && user) {
+          // Use the recordGasConsumption function from stock-service.ts
+          const result = await recordGasConsumption(
+            stockItem.id,
+            Number.parseFloat(quantity),
+            user.uid,
+            user.displayName || user.email || "Unknown User",
+            reason || "Sale",
+          )
+
+          if (!result.success) {
+            throw new Error("Failed to update stock quantity")
+          }
+        }
+      } else {
+        // If it's a restock transaction, we need to add to the stock instead
+        // This would typically be handled elsewhere, but we'll add a note
+        toast({
+          title: "Restock transaction created",
+          description:
+            "Note: Restock transactions should be processed through the stock management interface to update inventory.",
+        })
+      }
+
       // Call the callback with the new transaction
       onTransactionAdded(newTransaction)
 
       toast({
         title: "Transaction added",
-        description: "The transaction has been successfully added.",
+        description: "The transaction has been successfully added and stock updated.",
       })
 
       // Close the dialog and reset form
@@ -192,6 +327,27 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     }
   }
 
+  // Calculate the suggested price based on the selected gas type and quantity
+  const calculateSuggestedPrice = () => {
+    if (!gasType || !quantity) return ""
+
+    const stockItem = stockItems.find((item) => item.gasType === gasType)
+    if (!stockItem) return ""
+
+    const requestedQuantity = Number.parseFloat(quantity)
+    const suggestedPrice = stockItem.price * requestedQuantity
+
+    return suggestedPrice.toFixed(2)
+  }
+
+  // Update total when gas type or quantity changes
+  useEffect(() => {
+    const suggestedPrice = calculateSuggestedPrice()
+    if (suggestedPrice) {
+      setTotal(suggestedPrice)
+    }
+  }, [gasType, quantity])
+
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-md md:max-w-lg">
@@ -200,215 +356,259 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           <DialogDescription>Enter the details for the new transaction.</DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Gas Type */}
-            <div className="space-y-2">
-              <Label htmlFor="gasType">Gas Type *</Label>
-              <Select value={gasType} onValueChange={setGasType} required>
-                <SelectTrigger id="gasType">
-                  <SelectValue placeholder="Select gas type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="LPG">LPG</SelectItem>
-                  <SelectItem value="Propane">Propane</SelectItem>
-                  <SelectItem value="Butane">Butane</SelectItem>
-                  <SelectItem value="Natural Gas">Natural Gas</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Quantity */}
-            <div className="space-y-2">
-              <Label htmlFor="quantity">Quantity (kgs) *</Label>
-              <Input
-                id="quantity"
-                type="number"
-                step="0.01"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                required
-              />
-            </div>
-
-            {/* Payment Method */}
-            <div className="space-y-2">
-              <Label htmlFor="paymentMethod">Payment Method *</Label>
-              <Select value={paymentMethod} onValueChange={setPaymentMethod} required>
-                <SelectTrigger id="paymentMethod">
-                  <SelectValue placeholder="Select payment method" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Cash">Cash</SelectItem>
-                  <SelectItem value="Credit">Credit</SelectItem>
-                  <SelectItem value="M-Pesa">M-Pesa</SelectItem>
-                  <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
-                  <SelectItem value="Debit Card">Debit Card</SelectItem>
-                  <SelectItem value="Credit Card">Credit Card</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Total */}
-            <div className="space-y-2">
-              <Label htmlFor="total">Total Amount *</Label>
-              <Input
-                id="total"
-                type="number"
-                step="0.01"
-                value={total}
-                onChange={(e) => setTotal(e.target.value)}
-                required
-              />
-            </div>
-
-            {/* Currency */}
-            <div className="space-y-2">
-              <Label htmlFor="currency">Currency *</Label>
-              <Select value={currency} onValueChange={setCurrency} required>
-                <SelectTrigger id="currency">
-                  <SelectValue placeholder="Select currency" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="KES">KES</SelectItem>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="EUR">EUR</SelectItem>
-                  <SelectItem value="GBP">GBP</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Date */}
-            <div className="space-y-2">
-              <Label htmlFor="date">Transaction Date *</Label>
-              <DatePicker selected={date} onSelect={(date) => date && setDate(date)} />
-            </div>
-
-            {/* Reason */}
-            <div className="space-y-2">
-              <Label htmlFor="reason">Reason (Optional)</Label>
-              <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-            </div>
-
-            {/* Is Restock */}
-            <div className="flex items-center space-x-2 pt-6">
-              <Checkbox
-                id="isRestock"
-                checked={isRestock}
-                onCheckedChange={(checked) => setIsRestock(checked === true)}
-              />
-              <Label htmlFor="isRestock">This is a restock transaction</Label>
-            </div>
+        {stockLoading ? (
+          <div className="flex justify-center py-4">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <span className="ml-2">Loading stock data...</span>
           </div>
+        ) : stockError ? (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{stockError}</AlertDescription>
+          </Alert>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Is Restock */}
+              <div className="flex items-center space-x-2 md:col-span-2">
+                <Checkbox
+                  id="isRestock"
+                  checked={isRestock}
+                  onCheckedChange={(checked) => {
+                    setIsRestock(checked === true)
+                    // Reset insufficient stock warning when toggling restock
+                    if (checked === true) {
+                      setInsufficientStock(false)
+                    } else {
+                      checkStockAvailability()
+                    }
+                  }}
+                />
+                <Label htmlFor="isRestock">This is a restock transaction</Label>
+              </div>
 
-          {/* Credit-specific fields */}
-          {isCredit && (
-            <>
-              <div className="mt-6 border-t pt-4">
-                <h3 className="text-lg font-medium mb-4">Credit Details</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Customer Name */}
-                  <div className="space-y-2">
-                    <Label htmlFor="customerName">Customer Name</Label>
-                    <Input id="customerName" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-                  </div>
+              {/* Gas Type */}
+              <div className="space-y-2">
+                <Label htmlFor="gasType">Gas Type *</Label>
+                <Select value={gasType} onValueChange={setGasType} required>
+                  <SelectTrigger id="gasType">
+                    <SelectValue placeholder="Select gas type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {stockItems.length > 0 ? (
+                      stockItems.map((item) => (
+                        <SelectItem key={item.id} value={item.gasType}>
+                          {item.gasType} ({item.stock.toFixed(2)} kgs available)
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="" disabled>
+                        No gas types available
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+                {availableStock !== null && (
+                  <p className="text-xs text-muted-foreground mt-1">Available: {availableStock.toFixed(2)} kgs</p>
+                )}
+              </div>
 
-                  {/* Phone Number */}
-                  <div className="space-y-2">
-                    <Label htmlFor="phoneNumber">Phone Number</Label>
-                    <Input id="phoneNumber" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
-                  </div>
+              {/* Quantity */}
+              <div className="space-y-2">
+                <Label htmlFor="quantity" className={insufficientStock ? "text-destructive" : ""}>
+                  Quantity (kgs) *
+                </Label>
+                <Input
+                  id="quantity"
+                  type="number"
+                  step="0.01"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  required
+                  className={insufficientStock ? "border-destructive" : ""}
+                />
+                {insufficientStock && (
+                  <p className="text-xs text-destructive">
+                    Insufficient stock. Available: {availableStock?.toFixed(2)} kgs
+                  </p>
+                )}
+              </div>
 
-                  {/* Due Date */}
-                  <div className="space-y-2">
-                    <Label htmlFor="dueDate">Due Date</Label>
-                    <DatePicker selected={dueDate} onSelect={(date) => date && setDueDate(date)} />
-                  </div>
+              {/* Payment Method */}
+              <div className="space-y-2">
+                <Label htmlFor="paymentMethod">Payment Method *</Label>
+                <Select value={paymentMethod} onValueChange={setPaymentMethod} required>
+                  <SelectTrigger id="paymentMethod">
+                    <SelectValue placeholder="Select payment method" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Cash">Cash</SelectItem>
+                    <SelectItem value="Credit">Credit</SelectItem>
+                    <SelectItem value="M-Pesa">M-Pesa</SelectItem>
+                    <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                    <SelectItem value="Debit Card">Debit Card</SelectItem>
+                    <SelectItem value="Credit Card">Credit Card</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-                  {/* Paid Status */}
-                  <div className="flex items-center space-x-2 pt-6">
-                    <Checkbox id="paid" checked={paid} onCheckedChange={(checked) => setPaid(checked === true)} />
-                    <Label htmlFor="paid">Already Paid</Label>
-                  </div>
+              {/* Total */}
+              <div className="space-y-2">
+                <Label htmlFor="total">Total Amount *</Label>
+                <Input
+                  id="total"
+                  type="number"
+                  step="0.01"
+                  value={total}
+                  onChange={(e) => setTotal(e.target.value)}
+                  required
+                />
+                {gasType && quantity && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Suggested price: {calculateSuggestedPrice()} {currency}
+                  </p>
+                )}
+              </div>
 
-                  {/* Paid Date (only if paid is true) */}
-                  {paid && (
+              {/* Currency */}
+              <div className="space-y-2">
+                <Label htmlFor="currency">Currency *</Label>
+                <Select value={currency} onValueChange={setCurrency} required>
+                  <SelectTrigger id="currency">
+                    <SelectValue placeholder="Select currency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="KES">KES</SelectItem>
+                    <SelectItem value="USD">USD</SelectItem>
+                    <SelectItem value="EUR">EUR</SelectItem>
+                    <SelectItem value="GBP">GBP</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Date */}
+              <div className="space-y-2">
+                <Label htmlFor="date">Transaction Date *</Label>
+                <DatePicker selected={date} onSelect={(date) => date && setDate(date)} />
+              </div>
+
+              {/* Reason */}
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="reason">Reason (Optional)</Label>
+                <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+              </div>
+            </div>
+
+            {/* Credit-specific fields */}
+            {isCredit && (
+              <>
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-lg font-medium mb-4">Credit Details</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Customer Name */}
                     <div className="space-y-2">
-                      <Label htmlFor="paidDate">Payment Date</Label>
-                      <DatePicker selected={paidDate} onSelect={(date) => date && setPaidDate(date)} />
+                      <Label htmlFor="customerName">Customer Name</Label>
+                      <Input id="customerName" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
                     </div>
-                  )}
-                </div>
-              </div>
 
-              {/* Card Details */}
-              <div className="mt-6 border-t pt-4">
-                <h3 className="text-lg font-medium mb-4">Card Details (Optional)</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Card Type */}
-                  <div className="space-y-2">
-                    <Label htmlFor="cardType">Card Type</Label>
-                    <Select value={cardType} onValueChange={setCardType}>
-                      <SelectTrigger id="cardType">
-                        <SelectValue placeholder="Select card type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Visa">Visa</SelectItem>
-                        <SelectItem value="Mastercard">Mastercard</SelectItem>
-                        <SelectItem value="American Express">American Express</SelectItem>
-                        <SelectItem value="Discover">Discover</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    {/* Phone Number */}
+                    <div className="space-y-2">
+                      <Label htmlFor="phoneNumber">Phone Number</Label>
+                      <Input id="phoneNumber" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} />
+                    </div>
 
-                  {/* Card Number */}
-                  <div className="space-y-2">
-                    <Label htmlFor="cardNumber">Card Number</Label>
-                    <Input
-                      id="cardNumber"
-                      value={cardNumber}
-                      onChange={(e) => setCardNumber(e.target.value)}
-                      placeholder="Last 4 digits only"
-                    />
-                  </div>
+                    {/* Due Date */}
+                    <div className="space-y-2">
+                      <Label htmlFor="dueDate">Due Date</Label>
+                      <DatePicker selected={dueDate} onSelect={(date) => date && setDueDate(date)} />
+                    </div>
 
-                  {/* Name on Card */}
-                  <div className="space-y-2">
-                    <Label htmlFor="nameOnCard">Name on Card</Label>
-                    <Input id="nameOnCard" value={nameOnCard} onChange={(e) => setNameOnCard(e.target.value)} />
-                  </div>
+                    {/* Paid Status */}
+                    <div className="flex items-center space-x-2 pt-6">
+                      <Checkbox id="paid" checked={paid} onCheckedChange={(checked) => setPaid(checked === true)} />
+                      <Label htmlFor="paid">Already Paid</Label>
+                    </div>
 
-                  {/* Expiry Date */}
-                  <div className="space-y-2">
-                    <Label htmlFor="expiryDate">Expiry Date</Label>
-                    <Input
-                      id="expiryDate"
-                      value={expiryDate}
-                      onChange={(e) => setExpiryDate(e.target.value)}
-                      placeholder="MM/YY"
-                    />
+                    {/* Paid Date (only if paid is true) */}
+                    {paid && (
+                      <div className="space-y-2">
+                        <Label htmlFor="paidDate">Payment Date</Label>
+                        <DatePicker selected={paidDate} onSelect={(date) => date && setPaidDate(date)} />
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            </>
-          )}
 
-          <DialogFooter className="mt-6">
-            <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Adding...
-                </>
-              ) : (
-                "Add Transaction"
-              )}
-            </Button>
-          </DialogFooter>
-        </form>
+                {/* Card Details */}
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-lg font-medium mb-4">Card Details (Optional)</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Card Type */}
+                    <div className="space-y-2">
+                      <Label htmlFor="cardType">Card Type</Label>
+                      <Select value={cardType} onValueChange={setCardType}>
+                        <SelectTrigger id="cardType">
+                          <SelectValue placeholder="Select card type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Visa">Visa</SelectItem>
+                          <SelectItem value="Mastercard">Mastercard</SelectItem>
+                          <SelectItem value="American Express">American Express</SelectItem>
+                          <SelectItem value="Discover">Discover</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Card Number */}
+                    <div className="space-y-2">
+                      <Label htmlFor="cardNumber">Card Number</Label>
+                      <Input
+                        id="cardNumber"
+                        value={cardNumber}
+                        onChange={(e) => setCardNumber(e.target.value)}
+                        placeholder="Last 4 digits only"
+                      />
+                    </div>
+
+                    {/* Name on Card */}
+                    <div className="space-y-2">
+                      <Label htmlFor="nameOnCard">Name on Card</Label>
+                      <Input id="nameOnCard" value={nameOnCard} onChange={(e) => setNameOnCard(e.target.value)} />
+                    </div>
+
+                    {/* Expiry Date */}
+                    <div className="space-y-2">
+                      <Label htmlFor="expiryDate">Expiry Date</Label>
+                      <Input
+                        id="expiryDate"
+                        value={expiryDate}
+                        onChange={(e) => setExpiryDate(e.target.value)}
+                        placeholder="MM/YY"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting || (!isRestock && insufficientStock)}>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  "Add Transaction"
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   )
