@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { format } from "date-fns"
-import { CalendarIcon } from 'lucide-react'
+import { CalendarIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -15,9 +15,11 @@ interface DatePickerProps {
   onDateSelect?: (date: Date | undefined) => void
   disabled?: boolean
   className?: string
+  minDate?: Date
+  maxDate?: Date
 }
 
-function DatePicker({ date, selected, onDateSelect, disabled, className }: DatePickerProps) {
+function DatePicker({ date, selected, onDateSelect, disabled, className, minDate, maxDate }: DatePickerProps) {
   const [open, setOpen] = React.useState(false)
 
   return (
@@ -38,7 +40,14 @@ function DatePicker({ date, selected, onDateSelect, disabled, className }: DateP
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="start">
-          <Calendar mode="single" selected={date || selected} onSelect={onDateSelect} initialFocus />
+          <Calendar
+            mode="single"
+            selected={date || selected}
+            onSelect={onDateSelect}
+            initialFocus
+            fromDate={minDate}
+            toDate={maxDate}
+          />
         </PopoverContent>
       </Popover>
     </div>

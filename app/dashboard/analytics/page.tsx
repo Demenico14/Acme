@@ -396,13 +396,13 @@ export default function AnalyticsPage() {
             <div className="flex flex-col md:flex-row gap-2">
               <div className="grid gap-2">
                 <Label>Start Date</Label>
-                <DatePicker selected={startDate} onSelect={setStartDate} disabled={timeRange !== "custom"} />
+                <DatePicker selected={startDate} onDateSelect={setStartDate} disabled={timeRange !== "custom"} />
               </div>
               <div className="grid gap-2">
                 <Label>End Date</Label>
                 <DatePicker
                   selected={endDate}
-                  onSelect={setEndDate}
+                  onDateSelect={setEndDate}
                   disabled={timeRange !== "custom"}
                   minDate={startDate}
                 />
@@ -636,4 +636,3 @@ export default function AnalyticsPage() {
     </div>
   )
 }
-
