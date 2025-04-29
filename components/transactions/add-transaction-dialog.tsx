@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useState, useEffect, useCallback } from "react"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, getDocs, query, orderBy, doc, getDoc } from "firebase/firestore"
+import { collection, addDoc, getDocs, query, orderBy, doc, getDoc, updateDoc } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { DatePicker } from "@/components/ui/date-picker"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
@@ -16,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { AlertCircle, Calculator, Edit } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { useAuth } from "@/context/auth-context"
 
 interface AddTransactionDialogProps {
   isOpen: boolean
@@ -80,6 +81,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [existingTransaction, setExistingTransaction] = useState<Transaction | null>(null)
 
   const { toast } = useToast()
+  const { user } = useAuth()
 
   // Generate a unique idempotency key for this transaction
   const generateIdempotencyKey = useCallback(() => {
@@ -119,23 +121,6 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   }, [isOpen, fetchStockItems])
 
   // Check stock availability when quantity changes
-  const checkStockAvailability = useCallback(async () => {
-    if (!selectedStock || quantity <= 0 || isRestock) return true
-
-    try {
-      const stockRef = doc(db, "stock", selectedStock)
-      const stockDoc = await getDoc(stockRef)
-
-      if (stockDoc.exists()) {
-        const stockData = stockDoc.data() as StockItem
-        return stockData.stock >= quantity
-      }
-      return false
-    } catch (error) {
-      console.error("Error checking stock availability:", error)
-      return false
-    }
-  }, [selectedStock, quantity, isRestock])
 
   // Update calculated total when price or quantity changes
   useEffect(() => {
@@ -296,18 +281,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         }
       }
 
-      // Check stock availability for sales (not restocks)
-      if (!isRestock) {
-        const hasStock = await checkStockAvailability()
-        if (!hasStock) {
-          toast({
-            title: "Error",
-            description: "Not enough stock available for this transaction.",
-            variant: "destructive",
-          })
-          return
-        }
-      }
+      // Stock availability is now checked during the stock update process
 
       // Get the selected stock item
       const selectedItem = stockItems.find((item) => item.id === selectedStock)
@@ -334,6 +308,99 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           "This appears to be a duplicate transaction. Are you sure you want to proceed?",
         )
         if (!confirmDuplicate) {
+          return
+        }
+      }
+
+      // Update stock quantity for sales (not restocks)
+      if (!isRestock) {
+        try {
+          // Get current stock data
+          const stockRef = doc(db, "stock", selectedStock)
+          const stockDoc = await getDoc(stockRef)
+
+          if (!stockDoc.exists()) {
+            throw new Error("Stock item not found")
+          }
+
+          const currentStock = stockDoc.data() as StockItem
+          const newQuantity = currentStock.stock - quantity
+
+          if (newQuantity < 0) {
+            toast({
+              title: "Error",
+              description: "Not enough stock available for this transaction.",
+              variant: "destructive",
+            })
+            return
+          }
+
+          // Update stock quantity
+          await updateDoc(stockRef, {
+            stock: newQuantity,
+            lastUpdated: new Date().toISOString(),
+          })
+
+          // Record in stock history
+          await addDoc(collection(db, "stockHistory"), {
+            gasType: currentStock.gasType,
+            timestamp: new Date().toISOString(),
+            previousStock: currentStock.stock,
+            newStock: newQuantity,
+            changeAmount: -quantity, // Negative because it's consumption
+            reason: "Sale",
+            userId: user?.uid || "system",
+            userName: user?.displayName || "System",
+          })
+        } catch (error) {
+          console.error("Error updating stock quantity:", error)
+          toast({
+            title: "Error",
+            description: "Failed to update stock quantity. Please try again.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
+
+      // Update stock quantity for restocks
+      if (isRestock) {
+        try {
+          // Get current stock data
+          const stockRef = doc(db, "stock", selectedStock)
+          const stockDoc = await getDoc(stockRef)
+
+          if (!stockDoc.exists()) {
+            throw new Error("Stock item not found")
+          }
+
+          const currentStock = stockDoc.data() as StockItem
+          const newQuantity = currentStock.stock + quantity
+
+          // Update stock quantity
+          await updateDoc(stockRef, {
+            stock: newQuantity,
+            lastUpdated: new Date().toISOString(),
+          })
+
+          // Record in stock history
+          await addDoc(collection(db, "stockHistory"), {
+            gasType: currentStock.gasType,
+            timestamp: new Date().toISOString(),
+            previousStock: currentStock.stock,
+            newStock: newQuantity,
+            changeAmount: quantity, // Positive because it's a restock
+            reason: reason || "Restock",
+            userId: user?.uid || "system",
+            userName: user?.displayName || "System",
+          })
+        } catch (error) {
+          console.error("Error updating stock quantity:", error)
+          toast({
+            title: "Error",
+            description: "Failed to update stock quantity. Please try again.",
+            variant: "destructive",
+          })
           return
         }
       }
