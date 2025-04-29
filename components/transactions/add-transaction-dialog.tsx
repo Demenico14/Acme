@@ -588,7 +588,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                   <SelectContent>
                     <SelectItem value="Cash">Cash</SelectItem>
                     <SelectItem value="Credit">Credit</SelectItem>
-                    <SelectItem value="M-Pesa">M-Pesa</SelectItem>
+                    <SelectItem value="Wallet">Wallet</SelectItem>
                     <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
                     <SelectItem value="Debit Card">Debit Card</SelectItem>
                     <SelectItem value="Credit Card">Credit Card</SelectItem>
