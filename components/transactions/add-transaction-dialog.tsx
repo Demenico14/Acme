@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import {
   Dialog,
   DialogContent,
@@ -108,57 +108,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
   const isCredit = paymentMethod === "Credit"
 
-  // Reset form when dialog opens/closes
-  useEffect(() => {
-    if (isOpen) {
-      resetForm()
-      formSubmitted.current = false
-      submissionInProgress.current = false
-      transactionCreated.current = false
-    }
-  }, [isOpen])
-
-  // Fetch stock items when the dialog opens
-  useEffect(() => {
-    if (isOpen) {
-      fetchStockItems()
-    }
-  }, [isOpen])
-
   // Check stock availability when gas type or quantity changes
-  useEffect(() => {
-    if (gasType && quantity) {
-      checkStockAvailability()
-    } else {
-      setInsufficientStock(false)
-      setAvailableStock(null)
-    }
-  }, [gasType, quantity, isRestock])
-
-  // Fetch all stock items from Firestore
-  const fetchStockItems = async () => {
-    try {
-      setStockLoading(true)
-      setStockError(null)
-
-      const stockQuery = query(collection(db, "stock"))
-      const querySnapshot = await getDocs(stockQuery)
-      const stockData = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as StockItem[]
-
-      setStockItems(stockData)
-    } catch (error) {
-      console.error("Error fetching stock items:", error)
-      setStockError("Failed to load stock data. Please try again.")
-    } finally {
-      setStockLoading(false)
-    }
-  }
-
-  // Check if there's enough stock for the selected gas type and quantity
-  const checkStockAvailability = () => {
+  const checkStockAvailability = useCallback(() => {
     if (!gasType || !quantity || isRestock) {
       setInsufficientStock(false)
       setAvailableStock(null)
@@ -188,6 +139,55 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     // If using suggested price, update the total
     if (priceType === "suggested") {
       setTotal(calculatedPrice.toFixed(2))
+    }
+  }, [gasType, quantity, isRestock, stockItems, priceType])
+
+  // Reset form when dialog opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      resetForm()
+      formSubmitted.current = false
+      submissionInProgress.current = false
+      transactionCreated.current = false
+    }
+  }, [isOpen])
+
+  // Fetch stock items when the dialog opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchStockItems()
+    }
+  }, [isOpen])
+
+  // Check stock availability when gas type or quantity changes
+  useEffect(() => {
+    if (gasType && quantity) {
+      checkStockAvailability()
+    } else {
+      setInsufficientStock(false)
+      setAvailableStock(null)
+    }
+  }, [gasType, quantity, isRestock, checkStockAvailability])
+
+  // Fetch all stock items from Firestore
+  const fetchStockItems = async () => {
+    try {
+      setStockLoading(true)
+      setStockError(null)
+
+      const stockQuery = query(collection(db, "stock"))
+      const querySnapshot = await getDocs(stockQuery)
+      const stockData = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as StockItem[]
+
+      setStockItems(stockData)
+    } catch (error) {
+      console.error("Error fetching stock items:", error)
+      setStockError("Failed to load stock data. Please try again.")
+    } finally {
+      setStockLoading(false)
     }
   }
 

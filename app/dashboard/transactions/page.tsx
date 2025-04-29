@@ -109,7 +109,7 @@ export default function TransactionsPage() {
         })
 
         // Keep the first transaction (most recent), delete the rest
-        const [keep, ...duplicatesToDelete] = group
+        const [_keep, ...duplicatesToDelete] = group // Use _keep to indicate we're not using this variable
 
         duplicatesToDelete.forEach((duplicate) => {
           batch.delete(doc(db, "transactions", duplicate.id))
@@ -591,7 +591,7 @@ export default function TransactionsPage() {
           <AlertTriangle className="h-4 w-4 text-amber-600" />
           <AlertTitle className="text-amber-800">Duplicate Transactions Detected</AlertTitle>
           <AlertDescription className="text-amber-700">
-            We've detected potential duplicate transactions in your database.
+            We&apos;ve detected potential duplicate transactions in your database.
             <Button
               variant="outline"
               size="sm"
