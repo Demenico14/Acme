@@ -36,12 +36,7 @@ export interface Transaction {
   reason?: string
   isRestock?: boolean
   // Credit transaction fields
-  cardDetails?: {
-    cardNumber?: string
-    cardType?: string
-    expiryDate?: string
-    nameOnCard?: string
-  }
+  cardDetails?: Record<string, string>
   customerName?: string
   dueDate?: string
   paid?: boolean

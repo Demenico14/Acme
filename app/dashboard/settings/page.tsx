@@ -68,7 +68,15 @@ interface CsvData {
 interface BackupTransaction extends Omit<Transaction, "id"> {
   id?: string
   userId?: string
-  [key: string]: string | number | boolean | undefined
+  // Credit transaction fields
+  cardDetails?: Record<string, string>
+  customerName?: string
+  dueDate?: string
+  paid?: boolean
+  paidDate?: string
+  phoneNumber?: string
+  // Allow other dynamic properties
+  [key: string]: string | number | boolean | undefined | Record<string, string>
 }
 
 // Type for backup stock item data
@@ -313,6 +321,12 @@ export default function SettingsPage() {
             currency: t.currency,
             paymentMethod: t.paymentMethod,
             createdAt: new Date(t.createdAt).toLocaleDateString(),
+            // Add credit transaction fields if they exist
+            ...(t.customerName && { customerName: t.customerName }),
+            ...(t.phoneNumber && { phoneNumber: t.phoneNumber }),
+            ...(t.dueDate && { dueDate: t.dueDate }),
+            ...(t.paid !== undefined && { paid: t.paid ? "Yes" : "No" }),
+            ...(t.paidDate && { paidDate: new Date(t.paidDate).toLocaleDateString() }),
           })),
         )
 
@@ -557,8 +571,8 @@ export default function SettingsPage() {
         const transactionsRef = collection(db, "transactions")
 
         for (const transaction of data.transactions) {
-          // Create new transaction document
-          const newTransaction = {
+          // Create new transaction document with base fields
+          const newTransaction: Record<string, any> = {
             userId: user.uid,
             gasType: transaction.gasType,
             kgs: Number(transaction.kgs),
@@ -568,6 +582,14 @@ export default function SettingsPage() {
             date: transaction.date || new Date().toISOString(),
             createdAt: transaction.createdAt || new Date().toISOString(),
           }
+
+          // Add credit transaction fields if they exist
+          if (transaction.customerName) newTransaction.customerName = transaction.customerName
+          if (transaction.phoneNumber) newTransaction.phoneNumber = transaction.phoneNumber
+          if (transaction.dueDate) newTransaction.dueDate = transaction.dueDate
+          if (transaction.paid !== undefined) newTransaction.paid = transaction.paid
+          if (transaction.paidDate) newTransaction.paidDate = transaction.paidDate
+          if (transaction.cardDetails) newTransaction.cardDetails = transaction.cardDetails
 
           const newTransactionRef = doc(transactionsRef)
           batch.set(newTransactionRef, newTransaction)
@@ -1225,4 +1247,3 @@ export default function SettingsPage() {
     </div>
   )
 }
-
