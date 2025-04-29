@@ -12,6 +12,7 @@ import {
   Trash2,
   Plus,
   RefreshCw,
+  AlertTriangle,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -25,6 +26,7 @@ import TransactionDetailsDialog from "@/components/transactions/transaction-deta
 import DeleteConfirmationDialog from "@/components/transactions/delete-confirmation-dialog"
 import { useToast } from "@/hooks/use-toast"
 import AddTransactionDialog from "@/components/transactions/add-transaction-dialog"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -44,58 +46,119 @@ export default function TransactionsPage() {
   const { toast } = useToast()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
   const addButtonClickedRef = useRef(false)
+  const [duplicatesFound, setDuplicatesFound] = useState(false)
+  const [isDeletingDuplicates, setIsDeletingDuplicates] = useState(false)
 
   const transactionsPerPage = 20
+
+  // Function to identify and delete duplicate transactions
+  const findAndDeleteDuplicates = async () => {
+    try {
+      setIsDeletingDuplicates(true)
+
+      // Get all transactions ordered by date
+      const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
+      const querySnapshot = await getDocs(transactionsQuery)
+      const allTransactions = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Transaction[]
+
+      // Group transactions by their key attributes to find duplicates
+      const transactionGroups: Record<string, Transaction[]> = {}
+
+      allTransactions.forEach((transaction) => {
+        // Create a key based on gas type, quantity, and approximate time (within 2 minutes)
+        // This helps identify transactions that are likely duplicates
+        const dateTime = new Date(transaction.date).getTime()
+        const timeWindow = Math.floor(dateTime / (2 * 60 * 1000)) // 2-minute window
+        const key = `${transaction.gasType}-${transaction.kgs}-${timeWindow}`
+
+        if (!transactionGroups[key]) {
+          transactionGroups[key] = []
+        }
+        transactionGroups[key].push(transaction)
+      })
+
+      // Find groups with more than one transaction (duplicates)
+      const duplicateGroups = Object.values(transactionGroups).filter((group) => group.length > 1)
+
+      if (duplicateGroups.length === 0) {
+        toast({
+          title: "No duplicates found",
+          description: "No duplicate transactions were found in the database.",
+        })
+        setDuplicatesFound(false)
+        setIsDeletingDuplicates(false)
+        return
+      }
+
+      setDuplicatesFound(true)
+
+      // For each group of duplicates, keep the first one and delete the rest
+      const batch = writeBatch(db)
+      let deletedCount = 0
+
+      duplicateGroups.forEach((group) => {
+        // Sort by clientTimestamp if available, otherwise by createdAt
+        group.sort((a, b) => {
+          if (a.clientTimestamp && b.clientTimestamp) {
+            return b.clientTimestamp - a.clientTimestamp // Keep the most recent
+          }
+          return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        })
+
+        // Keep the first transaction (most recent), delete the rest
+        const [keep, ...duplicatesToDelete] = group
+
+        duplicatesToDelete.forEach((duplicate) => {
+          batch.delete(doc(db, "transactions", duplicate.id))
+          deletedCount++
+        })
+      })
+
+      // Commit the batch delete
+      await batch.commit()
+
+      toast({
+        title: "Duplicates removed",
+        description: `Successfully deleted ${deletedCount} duplicate transactions.`,
+      })
+
+      // Refresh the transactions list
+      fetchTransactions()
+    } catch (error) {
+      console.error("Error deleting duplicate transactions:", error)
+      toast({
+        title: "Error",
+        description: "Failed to delete duplicate transactions. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeletingDuplicates(false)
+    }
+  }
 
   const fetchTransactions = useCallback(async () => {
     try {
       setLoading(true)
-      const transactionsQuery = query(collection(db, "transactions"), orderBy("clientTimestamp", "desc"))
+      const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
       const querySnapshot = await getDocs(transactionsQuery)
-
-      // Process transactions to detect and handle duplicates
       const transactionsData = querySnapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       })) as Transaction[]
 
-      // Group transactions by sessionId to identify potential duplicates
-      const groupedBySession = transactionsData.reduce(
-        (acc, transaction) => {
-          if (transaction.sessionId) {
-            if (!acc[transaction.sessionId]) {
-              acc[transaction.sessionId] = []
-            }
-            acc[transaction.sessionId].push(transaction)
-          } else {
-            // For transactions without sessionId, use a fallback grouping
-            const fallbackKey = `${transaction.gasType}-${transaction.kgs}-${transaction.date}`
-            if (!acc[fallbackKey]) {
-              acc[fallbackKey] = []
-            }
-            acc[fallbackKey].push(transaction)
-          }
-          return acc
-        },
-        {} as Record<string, Transaction[]>,
-      )
+      // Check for potential duplicates to show warning
+      const potentialDuplicates = findPotentialDuplicates(transactionsData)
+      setDuplicatesFound(potentialDuplicates.length > 0)
 
-      // Filter out duplicates, keeping the most recent one
-      const uniqueTransactions = Object.values(groupedBySession).map((group) => {
-        if (group.length > 1) {
-          console.log(`Found ${group.length} potential duplicates for session/group`)
-          // Sort by timestamp and keep the most recent
-          return group.sort((a, b) => (b.clientTimestamp || 0) - (a.clientTimestamp || 0))[0]
-        }
-        return group[0]
-      })
-
-      setTransactions(uniqueTransactions)
-      setFilteredTransactions(uniqueTransactions)
+      setTransactions(transactionsData)
+      setFilteredTransactions(transactionsData)
 
       // Set default selected month to the most recent month with transactions
-      if (uniqueTransactions.length > 0 && !selectedMonth) {
-        const mostRecentDate = new Date(uniqueTransactions[0].date)
+      if (transactionsData.length > 0 && !selectedMonth) {
+        const mostRecentDate = new Date(transactionsData[0].date)
         const monthYear = `${mostRecentDate.getFullYear()}-${String(mostRecentDate.getMonth() + 1).padStart(2, "0")}`
         setSelectedMonth(monthYear)
       }
@@ -110,6 +173,26 @@ export default function TransactionsPage() {
       setLoading(false)
     }
   }, [selectedMonth, toast])
+
+  // Helper function to identify potential duplicates
+  const findPotentialDuplicates = (transactions: Transaction[]): Transaction[][] => {
+    const transactionGroups: Record<string, Transaction[]> = {}
+
+    transactions.forEach((transaction) => {
+      // Create a key based on gas type, quantity, and approximate time (within 2 minutes)
+      const dateTime = new Date(transaction.date).getTime()
+      const timeWindow = Math.floor(dateTime / (2 * 60 * 1000)) // 2-minute window
+      const key = `${transaction.gasType}-${transaction.kgs}-${timeWindow}`
+
+      if (!transactionGroups[key]) {
+        transactionGroups[key] = []
+      }
+      transactionGroups[key].push(transaction)
+    })
+
+    // Return groups with more than one transaction (duplicates)
+    return Object.values(transactionGroups).filter((group) => group.length > 1)
+  }
 
   useEffect(() => {
     fetchTransactions()
@@ -348,18 +431,8 @@ export default function TransactionsPage() {
   }
 
   const handleAddTransaction = (newTransaction: Transaction) => {
-    // Check if the transaction is already in the state
-    const isDuplicate = transactions.some(
-      (t) =>
-        t.gasType === newTransaction.gasType &&
-        t.kgs === newTransaction.kgs &&
-        Math.abs(new Date(t.date).getTime() - new Date(newTransaction.date).getTime()) < 60000,
-    )
-
-    if (!isDuplicate) {
-      // Use a functional update to ensure we're working with the latest state
-      setTransactions((currentTransactions) => [newTransaction, ...currentTransactions])
-    }
+    // Add the new transaction to the state
+    setTransactions((currentTransactions) => [newTransaction, ...currentTransactions])
 
     // Refresh transactions from the database to ensure we have the latest data
     // Use setTimeout to avoid state update conflicts
@@ -513,6 +586,25 @@ export default function TransactionsPage() {
         </div>
       </div>
 
+      {duplicatesFound && (
+        <Alert variant="warning" className="bg-amber-50 border-amber-200">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertTitle className="text-amber-800">Duplicate Transactions Detected</AlertTitle>
+          <AlertDescription className="text-amber-700">
+            We've detected potential duplicate transactions in your database.
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-4 border-amber-300 text-amber-800 hover:bg-amber-100"
+              onClick={findAndDeleteDuplicates}
+              disabled={isDeletingDuplicates}
+            >
+              {isDeletingDuplicates ? "Cleaning..." : "Clean Up Duplicates"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -520,17 +612,19 @@ export default function TransactionsPage() {
               <CardTitle>Transaction History</CardTitle>
               <CardDescription>View and manage all transactions</CardDescription>
             </div>
-            {filteredTransactions.length > 0 && (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleClearAllTransactions}
-                className="flex items-center gap-1"
-              >
-                <Trash2 className="h-4 w-4" />
-                {viewMode === "folders" && selectedMonth ? "Clear Month" : "Clear All Transactions"}
-              </Button>
-            )}
+            <div className="flex space-x-2">
+              {filteredTransactions.length > 0 && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleClearAllTransactions}
+                  className="flex items-center gap-1"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {viewMode === "folders" && selectedMonth ? "Clear Month" : "Clear All Transactions"}
+                </Button>
+              )}
+            </div>
           </div>
 
           <div className="mt-4 flex flex-col space-y-2 md:flex-row md:space-y-0 md:space-x-2">
