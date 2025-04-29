@@ -4,6 +4,7 @@ import type React from "react"
 import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { User, Download, Upload, Shield, Database, Moon, Sun, Laptop, Save } from "lucide-react"
+import type { Timestamp, FieldValue } from "firebase/firestore"
 
 import { useAuth } from "@/context/auth-context"
 import { useTheme } from "@/components/theme-provider"
@@ -56,7 +57,8 @@ interface CsvTransactionData {
   total?: string | number
   currency?: string
   paymentMethod?: string
-  [key: string]: string | number | undefined // For any other fields in the CSV
+  createdAt?: string // Use any here to avoid complex typing in this interface
+  [key: string]: string | number | undefined // Update index signature
 }
 
 // Generic type for CSV data
@@ -76,7 +78,7 @@ interface BackupTransaction extends Omit<Transaction, "id"> {
   paidDate?: string
   phoneNumber?: string
   // Allow other dynamic properties
-  [key: string]: string | number | boolean | undefined | Record<string, string>
+  [key: string]: string | number | boolean | undefined | Record<string, string> | Timestamp | FieldValue
 }
 
 // Type for backup stock item data
@@ -220,6 +222,27 @@ export default function SettingsPage() {
     }
   }
 
+  // Helper function to safely format dates from different possible formats
+  const formatTimestamp = (value: string | Date | Timestamp | FieldValue | undefined): string => {
+    if (!value) return new Date().toISOString()
+
+    if (typeof value === "string") {
+      return value
+    }
+
+    if (value instanceof Date) {
+      return value.toISOString()
+    }
+
+    // Handle Firestore Timestamp
+    if (typeof value === "object" && "toDate" in value && typeof value.toDate === "function") {
+      return value.toDate().toISOString()
+    }
+
+    // For FieldValue or other types, return current date
+    return new Date().toISOString()
+  }
+
   // Define the return type for fetchAllData
   interface AllData {
     currentUser: Record<string, unknown> | null
@@ -320,7 +343,7 @@ export default function SettingsPage() {
             totalPrice: t.total,
             currency: t.currency,
             paymentMethod: t.paymentMethod,
-            createdAt: new Date(t.createdAt).toLocaleDateString(),
+            createdAt: new Date(formatTimestamp(t.createdAt)).toLocaleDateString(),
             // Add credit transaction fields if they exist
             ...(t.customerName && { customerName: t.customerName }),
             ...(t.phoneNumber && { phoneNumber: t.phoneNumber }),
@@ -580,7 +603,7 @@ export default function SettingsPage() {
             currency: transaction.currency || "USD",
             paymentMethod: transaction.paymentMethod || "Cash",
             date: transaction.date || new Date().toISOString(),
-            createdAt: transaction.createdAt || new Date().toISOString(),
+            createdAt: formatTimestamp(transaction.createdAt) || new Date().toISOString(),
           }
 
           // Add credit transaction fields if they exist
