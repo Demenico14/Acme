@@ -4,7 +4,7 @@ import { collection, deleteDoc, doc, getDocs, orderBy, query, writeBatch } from 
 import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye, Trash2, Plus } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { Transaction } from "@/types"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -35,11 +35,7 @@ export default function TransactionsPage() {
 
   const transactionsPerPage = 20
 
-  useEffect(() => {
-    fetchTransactions()
-  }, [selectedMonth])
-
-  async function fetchTransactions() {
+  const fetchTransactions = useCallback(async () => {
     try {
       setLoading(true)
       const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
@@ -64,7 +60,11 @@ export default function TransactionsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedMonth, toast])
+
+  useEffect(() => {
+    fetchTransactions()
+  }, [selectedMonth, fetchTransactions])
 
   useEffect(() => {
     let filtered = transactions
@@ -401,6 +401,9 @@ export default function TransactionsPage() {
       <div className="flex items-center justify-between">
         <h2 className="text-3xl font-bold tracking-tight">Transactions</h2>
         <div className="flex space-x-2">
+          <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
+            <Plus className="h-4 w-4 mr-1" /> Add Transaction
+          </Button>
           <Button variant="default" size="sm" onClick={() => setIsAddDialogOpen(true)} className="mr-2">
             <Plus className="h-4 w-4 mr-1" /> Add Transaction
           </Button>
