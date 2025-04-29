@@ -35,6 +35,18 @@ export interface Transaction {
   total: number
   reason?: string
   isRestock?: boolean
+  // Credit transaction fields
+  cardDetails?: {
+    cardNumber?: string
+    cardType?: string
+    expiryDate?: string
+    nameOnCard?: string
+  }
+  customerName?: string
+  dueDate?: string
+  paid?: boolean
+  paidDate?: string
+  phoneNumber?: string
 }
 
 export interface Address {
@@ -90,4 +102,3 @@ export interface Cylinder {
   count: number
   lastRestocked: string // Added lastRestocked property
 }
-

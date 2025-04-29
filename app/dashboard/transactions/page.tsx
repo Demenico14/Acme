@@ -1,7 +1,7 @@
 "use client"
 import { db } from "@/lib/firebase"
 import { collection, getDocs, orderBy, query } from "firebase/firestore"
-import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen } from "lucide-react"
+import { Search, ShoppingCart, Calendar, ChevronRight, FolderOpen, CreditCard, Eye } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { useEffect, useState } from "react"
@@ -9,6 +9,8 @@ import type { Transaction } from "@/types"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Badge } from "@/components/ui/badge"
+import TransactionDetailsDialog from "@/components/transactions/transaction-details-dialog"
 
 export default function TransactionsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([])
@@ -19,6 +21,8 @@ export default function TransactionsPage() {
   const [searchField, setSearchField] = useState("all")
   const [viewMode, setViewMode] = useState<"all" | "folders">("folders")
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null)
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null)
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false)
 
   const transactionsPerPage = 20
 
@@ -72,6 +76,7 @@ export default function TransactionsPage() {
             transaction.currency?.toLowerCase().includes(term) ||
             transaction.total.toString().includes(term) ||
             transaction.kgs.toString().includes(term) ||
+            transaction.customerName?.toLowerCase().includes(term) ||
             new Date(transaction.date).toLocaleString().toLowerCase().includes(term)
           )
         }
@@ -86,6 +91,10 @@ export default function TransactionsPage() {
 
         if (searchField === "Transaction_ID") {
           return transaction.id.toLowerCase().includes(term)
+        }
+
+        if (searchField === "customerName") {
+          return transaction.customerName?.toLowerCase().includes(term) || false
         }
 
         return false
@@ -182,6 +191,11 @@ export default function TransactionsPage() {
     )
   }
 
+  const handleViewDetails = (transaction: Transaction) => {
+    setSelectedTransaction(transaction)
+    setIsDetailsOpen(true)
+  }
+
   function renderTransactionsTable() {
     if (loading) {
       return (
@@ -212,21 +226,50 @@ export default function TransactionsPage() {
               <TableHead>Quantity (kgs)</TableHead>
               <TableHead>Payment Method</TableHead>
               <TableHead>Total</TableHead>
-              <TableHead>Currency</TableHead>
               <TableHead>Date</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {currentTransactions.map((transaction) => (
-              <TableRow key={transaction.id}>
-                <TableCell>{transaction.id}</TableCell>
-                <TableCell>{transaction.kgs.toFixed(2)}</TableCell>
-                <TableCell>{transaction.paymentMethod}</TableCell>
-                <TableCell>${transaction.total.toFixed(2)}</TableCell>
-                <TableCell>{transaction.currency}</TableCell>
-                <TableCell>{new Date(transaction.date).toLocaleString()}</TableCell>
-              </TableRow>
-            ))}
+            {currentTransactions.map((transaction) => {
+              const isCredit = transaction.paymentMethod?.toLowerCase() === "credit"
+              return (
+                <TableRow key={transaction.id}>
+                  <TableCell className="font-medium">{transaction.id}</TableCell>
+                  <TableCell>{transaction.kgs.toFixed(2)}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center">
+                      {transaction.paymentMethod}
+                      {isCredit && <CreditCard className="ml-1 h-3 w-3 text-muted-foreground" />}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {transaction.currency} {transaction.total.toFixed(2)}
+                  </TableCell>
+                  <TableCell>{new Date(transaction.date).toLocaleString()}</TableCell>
+                  <TableCell>
+                    {isCredit &&
+                      (transaction.paid ? (
+                        <Badge variant="success">Paid</Badge>
+                      ) : (
+                        <Badge variant="destructive">Unpaid</Badge>
+                      ))}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleViewDetails(transaction)}
+                      title="View Details"
+                    >
+                      <Eye className="h-4 w-4" />
+                      <span className="sr-only">View Details</span>
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
 
@@ -281,6 +324,7 @@ export default function TransactionsPage() {
                 <SelectItem value="gasType">Gas Type</SelectItem>
                 <SelectItem value="paymentMethod">Payment Method</SelectItem>
                 <SelectItem value="Transaction_ID">Transaction ID</SelectItem>
+                <SelectItem value="customerName">Customer Name</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -335,7 +379,12 @@ export default function TransactionsPage() {
           )}
         </CardContent>
       </Card>
+
+      <TransactionDetailsDialog
+        transaction={selectedTransaction}
+        isOpen={isDetailsOpen}
+        onClose={() => setIsDetailsOpen(false)}
+      />
     </div>
   )
 }
-
