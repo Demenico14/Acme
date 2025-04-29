@@ -64,7 +64,7 @@ export default function TransactionsPage() {
       const result = await deduplicateTransactions()
 
       if (result.success) {
-        if (result.removedCount > 0) {
+        if (result.removedCount && result.removedCount > 0) {
           toast({
             title: "Duplicates removed",
             description: `Successfully removed ${result.removedCount} duplicate transactions.`,
@@ -132,7 +132,7 @@ export default function TransactionsPage() {
         toast({
           title: "Duplicate transactions detected",
           description: `${filteredCount} duplicate transactions have been filtered from the view. Click "Clean Up Duplicates" to remove them from the database.`,
-          variant: "warning",
+          variant: "destructive",
         })
       }
     } catch (error) {
@@ -557,7 +557,7 @@ export default function TransactionsPage() {
       </div>
 
       {duplicatesFound && (
-        <Alert variant="warning" className="bg-amber-50 border-amber-200">
+        <Alert variant="destructive" className="bg-amber-50 border-amber-200">
           <AlertTriangle className="h-4 w-4 text-amber-600" />
           <AlertTitle className="text-amber-800">Duplicate Transactions Detected</AlertTitle>
           <AlertDescription className="text-amber-700 flex items-center justify-between">

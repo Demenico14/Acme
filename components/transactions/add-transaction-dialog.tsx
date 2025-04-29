@@ -344,7 +344,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         </DialogHeader>
 
         {duplicateWarning && existingTransaction && (
-          <Alert variant="warning" className="bg-amber-50 border-amber-200 mb-4">
+          <Alert className="bg-amber-50 border-amber-200 mb-4">
             <AlertCircle className="h-4 w-4 text-amber-600" />
             <AlertTitle className="text-amber-800">Potential Duplicate Transaction</AlertTitle>
             <AlertDescription className="text-amber-700">
@@ -458,8 +458,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
               Total
             </Label>
             <div className="col-span-3 flex">
-              <Select value={currency} onValueChange={setCurrency} className="w-24 mr-2">
-                <SelectTrigger>
+              <Select value={currency} onValueChange={setCurrency}>
+                <SelectTrigger className="w-24 mr-2">
                   <SelectValue placeholder="Currency" />
                 </SelectTrigger>
                 <SelectContent>
@@ -511,7 +511,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
               Date
             </Label>
             <div className="col-span-3">
-              <DatePicker date={date} setDate={setDate} />
+              <DatePicker date={date} onDateSelect={(newDate) => newDate && setDate(newDate)} />
             </div>
           </div>
 
@@ -563,7 +563,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
                   Due Date
                 </Label>
                 <div className="col-span-3">
-                  <DatePicker date={dueDate} setDate={setDueDate} />
+                  <DatePicker date={dueDate} onDateSelect={(newDate) => newDate && setDueDate(newDate)} />
                 </div>
               </div>
             </>
