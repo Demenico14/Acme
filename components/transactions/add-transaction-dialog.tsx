@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp, getDocs, query } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, getDocs, query, orderBy } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2, AlertCircle, Calculator, Edit } from "lucide-react"
 import type { Transaction } from "@/types"
@@ -50,6 +50,8 @@ interface FirestoreTransactionData {
   paidDate?: string
   cardDetails?: Record<string, string>
   priceType: "suggested" | "custom"
+  idempotencyKey: string // Add this line
+  clientTimestamp: number // Add this line
 }
 
 interface StockItem {
@@ -213,6 +215,11 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   }
 
   const handleClose = () => {
+    // Reset the form submission ref to ensure we can submit again after reopening
+    formSubmitted.current = false
+    // Reset the form data
+    resetForm()
+    // Close the dialog
     onClose()
   }
 
@@ -221,6 +228,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
     // Prevent duplicate submissions
     if (formSubmitted.current || isSubmitting) {
+      console.log("Preventing duplicate submission")
       return
     }
 
@@ -264,6 +272,9 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     try {
       setIsSubmitting(true)
 
+      // Generate an idempotency key to prevent duplicate transactions
+      const idempotencyKey = `${Date.now()}-${gasType}-${quantity}-${Math.random().toString(36).substring(2, 9)}`
+
       // Prepare transaction data for Firestore
       const firestoreData: FirestoreTransactionData = {
         gasType,
@@ -274,6 +285,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         date: date.toISOString(),
         isRestock,
         priceType,
+        idempotencyKey, // Add idempotency key
+        clientTimestamp: Date.now(), // Add client timestamp for ordering
       }
 
       // Add optional fields if they exist
@@ -296,6 +309,37 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
 
         if (Object.keys(cardDetails).length > 0) {
           firestoreData.cardDetails = cardDetails
+        }
+      }
+
+      // Check for recent duplicate transactions
+      const recentTransactionsQuery = query(collection(db, "transactions"), orderBy("clientTimestamp", "desc"))
+
+      const recentSnapshot = await getDocs(recentTransactionsQuery)
+      const recentTransactions = recentSnapshot.docs.map((doc) => doc.data())
+
+      // Check for a potential duplicate in recent transactions (within last 30 seconds)
+      const potentialDuplicate = recentTransactions.find(
+        (t) =>
+          t.gasType === gasType &&
+          t.kgs === Number.parseFloat(quantity) &&
+          t.total === Number.parseFloat(total) &&
+          t.clientTimestamp > Date.now() - 30000, // Last 30 seconds
+      )
+
+      if (potentialDuplicate) {
+        console.warn("Potential duplicate transaction detected:", potentialDuplicate)
+        toast({
+          title: "Warning",
+          description: "A similar transaction was recently added. Please check before proceeding.",
+          variant: "destructive",
+        })
+
+        // Confirm with the user if they want to proceed
+        if (!window.confirm("A similar transaction was recently added. Are you sure you want to add another one?")) {
+          formSubmitted.current = false
+          setIsSubmitting(false)
+          return
         }
       }
 

@@ -310,10 +310,19 @@ export default function TransactionsPage() {
   }
 
   const handleAddTransaction = (newTransaction: Transaction) => {
-    // Add the new transaction to the local state
-    setTransactions([newTransaction, ...transactions])
+    // Check if the transaction is already in the state
+    const isDuplicate = transactions.some((t) => t.id === newTransaction.id)
+
+    if (!isDuplicate) {
+      // Use a functional update to ensure we're working with the latest state
+      setTransactions((currentTransactions) => [newTransaction, ...currentTransactions])
+    }
+
     // Refresh transactions from the database to ensure we have the latest data
-    fetchTransactions()
+    // Use setTimeout to avoid state update conflicts
+    setTimeout(() => {
+      fetchTransactions()
+    }, 300)
   }
 
   function renderTransactionsTable() {
@@ -424,10 +433,19 @@ export default function TransactionsPage() {
             variant="default"
             size="sm"
             onClick={() => {
-              // Ensure dialog is closed before opening it again
+              // Disable the button temporarily to prevent double-clicks
+              const button = document.activeElement as HTMLButtonElement
+              if (button) button.disabled = true
+
+              // Close dialog if it's open
               setIsAddDialogOpen(false)
-              // Use setTimeout to ensure state is updated before opening
-              setTimeout(() => setIsAddDialogOpen(true), 0)
+
+              // Wait for state update before reopening
+              setTimeout(() => {
+                setIsAddDialogOpen(true)
+                // Re-enable the button
+                if (button) button.disabled = false
+              }, 300)
             }}
             className="mr-2"
           >
@@ -544,6 +562,7 @@ export default function TransactionsPage() {
       {/* Only render the dialog when isAddDialogOpen is true */}
       {isAddDialogOpen && (
         <AddTransactionDialog
+          key={`transaction-dialog-${Date.now()}`} // Add a unique key to force fresh instance
           isOpen={isAddDialogOpen}
           onClose={() => setIsAddDialogOpen(false)}
           onTransactionAdded={handleAddTransaction}

@@ -42,6 +42,9 @@ export interface Transaction {
   paid?: boolean
   paidDate?: string
   phoneNumber?: string
+  // Duplicate prevention fields
+  idempotencyKey?: string
+  clientTimestamp?: number
 }
 
 export interface Address {
