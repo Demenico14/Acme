@@ -85,10 +85,12 @@ export async function validateTransaction(transaction: Partial<Transaction>) {
     const transactionsQuery = query(transactionsRef, orderBy("date", "desc"))
 
     const querySnapshot = await getDocs(transactionsQuery)
-    const recentTransactions = querySnapshot.docs.map((doc) => ({
+    const allTransactions = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
-    })) as Transaction[].filter(t => new Date(t.date) >= new Date(twoMinutesAgo))
+    })) as Transaction[]
+
+    const recentTransactions = allTransactions.filter((t) => new Date(t.date) >= new Date(twoMinutesAgo))
 
     // Check if this transaction would be a duplicate
     for (const existingTransaction of recentTransactions) {
