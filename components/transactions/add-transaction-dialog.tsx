@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp, type FieldValue } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2 } from "lucide-react"
 import type { Transaction } from "@/types"
@@ -30,14 +30,14 @@ interface AddTransactionDialogProps {
 }
 
 // Define a type for the transaction data we're sending to Firestore
-interface TransactionData {
+// This is separate from the Transaction interface because Firestore uses serverTimestamp()
+interface FirestoreTransactionData {
   gasType: string
   kgs: number
   paymentMethod: string
   total: number
   currency: string
   date: string
-  createdAt: FieldValue
   reason?: string
   isRestock?: boolean
   customerName?: string
@@ -45,12 +45,7 @@ interface TransactionData {
   dueDate?: string
   paid?: boolean
   paidDate?: string
-  cardDetails?: {
-    cardType?: string
-    cardNumber?: string
-    nameOnCard?: string
-    expiryDate?: string
-  }
+  cardDetails?: Record<string, string>
 }
 
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
@@ -127,28 +122,27 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     try {
       setIsSubmitting(true)
 
-      // Prepare transaction data
-      const transactionData: TransactionData = {
+      // Prepare transaction data for Firestore
+      const firestoreData: FirestoreTransactionData = {
         gasType,
         kgs: Number.parseFloat(quantity),
         paymentMethod,
         total: Number.parseFloat(total),
         currency,
         date: date.toISOString(),
-        createdAt: serverTimestamp(),
       }
 
       // Add optional fields if they exist
-      if (reason) transactionData.reason = reason
-      if (isRestock) transactionData.isRestock = isRestock
+      if (reason) firestoreData.reason = reason
+      if (isRestock) firestoreData.isRestock = isRestock
 
       // Add credit-specific fields if payment method is credit
       if (isCredit) {
-        if (customerName) transactionData.customerName = customerName
-        if (phoneNumber) transactionData.phoneNumber = phoneNumber
-        if (dueDate) transactionData.dueDate = dueDate.toISOString()
-        transactionData.paid = paid
-        if (paid && paidDate) transactionData.paidDate = paidDate.toISOString()
+        if (customerName) firestoreData.customerName = customerName
+        if (phoneNumber) firestoreData.phoneNumber = phoneNumber
+        if (dueDate) firestoreData.dueDate = dueDate.toISOString()
+        firestoreData.paid = paid
+        if (paid && paidDate) firestoreData.paidDate = paidDate.toISOString()
 
         // Add card details if any are provided
         const cardDetails: Record<string, string> = {}
@@ -158,18 +152,23 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         if (expiryDate) cardDetails.expiryDate = expiryDate
 
         if (Object.keys(cardDetails).length > 0) {
-          transactionData.cardDetails = cardDetails as TransactionData["cardDetails"]
+          firestoreData.cardDetails = cardDetails
         }
       }
 
-      // Add to Firestore
-      const docRef = await addDoc(collection(db, "transactions"), transactionData)
+      // Add to Firestore with serverTimestamp
+      const docRef = await addDoc(collection(db, "transactions"), {
+        ...firestoreData,
+        createdAt: serverTimestamp(),
+      })
 
-      // Add ID to the transaction data
-      const newTransaction = {
-        ...transactionData,
+      // Create a Transaction object for the UI
+      // Use the current date string for createdAt since serverTimestamp isn't available client-side
+      const newTransaction: Transaction = {
+        ...firestoreData,
         id: docRef.id,
-      } as Transaction
+        createdAt: new Date().toISOString(),
+      }
 
       // Call the callback with the new transaction
       onTransactionAdded(newTransaction)
