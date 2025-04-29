@@ -15,7 +15,7 @@ import {
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
 import type { Transaction } from "@/types"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
@@ -43,21 +43,59 @@ export default function TransactionsPage() {
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null)
   const { toast } = useToast()
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false)
+  const addButtonClickedRef = useRef(false)
 
   const transactionsPerPage = 20
 
   const fetchTransactions = useCallback(async () => {
     try {
       setLoading(true)
-      const transactionsQuery = query(collection(db, "transactions"), orderBy("date", "desc"))
+      const transactionsQuery = query(collection(db, "transactions"), orderBy("clientTimestamp", "desc"))
       const querySnapshot = await getDocs(transactionsQuery)
-      const transactionsData = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Transaction[]
-      setTransactions(transactionsData)
-      setFilteredTransactions(transactionsData)
+
+      // Process transactions to detect and handle duplicates
+      const transactionsData = querySnapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Transaction[]
+
+      // Group transactions by sessionId to identify potential duplicates
+      const groupedBySession = transactionsData.reduce(
+        (acc, transaction) => {
+          if (transaction.sessionId) {
+            if (!acc[transaction.sessionId]) {
+              acc[transaction.sessionId] = []
+            }
+            acc[transaction.sessionId].push(transaction)
+          } else {
+            // For transactions without sessionId, use a fallback grouping
+            const fallbackKey = `${transaction.gasType}-${transaction.kgs}-${transaction.date}`
+            if (!acc[fallbackKey]) {
+              acc[fallbackKey] = []
+            }
+            acc[fallbackKey].push(transaction)
+          }
+          return acc
+        },
+        {} as Record<string, Transaction[]>,
+      )
+
+      // Filter out duplicates, keeping the most recent one
+      const uniqueTransactions = Object.values(groupedBySession).map((group) => {
+        if (group.length > 1) {
+          console.log(`Found ${group.length} potential duplicates for session/group`)
+          // Sort by timestamp and keep the most recent
+          return group.sort((a, b) => (b.clientTimestamp || 0) - (a.clientTimestamp || 0))[0]
+        }
+        return group[0]
+      })
+
+      setTransactions(uniqueTransactions)
+      setFilteredTransactions(uniqueTransactions)
 
       // Set default selected month to the most recent month with transactions
-      if (transactionsData.length > 0 && !selectedMonth) {
-        const mostRecentDate = new Date(transactionsData[0].date)
+      if (uniqueTransactions.length > 0 && !selectedMonth) {
+        const mostRecentDate = new Date(uniqueTransactions[0].date)
         const monthYear = `${mostRecentDate.getFullYear()}-${String(mostRecentDate.getMonth() + 1).padStart(2, "0")}`
         setSelectedMonth(monthYear)
       }
@@ -311,7 +349,12 @@ export default function TransactionsPage() {
 
   const handleAddTransaction = (newTransaction: Transaction) => {
     // Check if the transaction is already in the state
-    const isDuplicate = transactions.some((t) => t.id === newTransaction.id)
+    const isDuplicate = transactions.some(
+      (t) =>
+        t.gasType === newTransaction.gasType &&
+        t.kgs === newTransaction.kgs &&
+        Math.abs(new Date(t.date).getTime() - new Date(newTransaction.date).getTime()) < 60000,
+    )
 
     if (!isDuplicate) {
       // Use a functional update to ensure we're working with the latest state
@@ -322,6 +365,25 @@ export default function TransactionsPage() {
     // Use setTimeout to avoid state update conflicts
     setTimeout(() => {
       fetchTransactions()
+    }, 300)
+  }
+
+  const handleAddButtonClick = () => {
+    // Prevent multiple rapid clicks
+    if (addButtonClickedRef.current) return
+
+    addButtonClickedRef.current = true
+
+    // Close dialog if it's open
+    setIsAddDialogOpen(false)
+
+    // Wait for state update before reopening
+    setTimeout(() => {
+      setIsAddDialogOpen(true)
+      // Reset the click flag after a delay
+      setTimeout(() => {
+        addButtonClickedRef.current = false
+      }, 1000)
     }, 300)
   }
 
@@ -432,22 +494,9 @@ export default function TransactionsPage() {
           <Button
             variant="default"
             size="sm"
-            onClick={() => {
-              // Disable the button temporarily to prevent double-clicks
-              const button = document.activeElement as HTMLButtonElement
-              if (button) button.disabled = true
-
-              // Close dialog if it's open
-              setIsAddDialogOpen(false)
-
-              // Wait for state update before reopening
-              setTimeout(() => {
-                setIsAddDialogOpen(true)
-                // Re-enable the button
-                if (button) button.disabled = false
-              }, 300)
-            }}
+            onClick={handleAddButtonClick}
             className="mr-2"
+            disabled={addButtonClickedRef.current}
           >
             <Plus className="h-4 w-4 mr-1" /> Add Transaction
           </Button>

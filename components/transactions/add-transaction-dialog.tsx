@@ -18,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { DatePicker } from "@/components/ui/date-picker"
 import { Checkbox } from "@/components/ui/checkbox"
 import { db } from "@/lib/firebase"
-import { collection, addDoc, serverTimestamp, getDocs, query, orderBy } from "firebase/firestore"
+import { collection, addDoc, serverTimestamp, getDocs, query, where, orderBy, limit } from "firebase/firestore"
 import { useToast } from "@/hooks/use-toast"
 import { Loader2, AlertCircle, Calculator, Edit } from "lucide-react"
 import type { Transaction } from "@/types"
@@ -26,6 +26,7 @@ import { recordGasConsumption } from "@/lib/stock-service"
 import { useAuth } from "@/context/auth-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+
 interface AddTransactionDialogProps {
   isOpen: boolean
   onClose: () => void
@@ -50,8 +51,9 @@ interface FirestoreTransactionData {
   paidDate?: string
   cardDetails?: Record<string, string>
   priceType: "suggested" | "custom"
-  idempotencyKey: string // Add this line
-  clientTimestamp: number // Add this line
+  idempotencyKey: string
+  clientTimestamp: number
+  sessionId: string // Add session ID to track transactions from the same session
 }
 
 interface StockItem {
@@ -61,6 +63,10 @@ interface StockItem {
   stock: number
   lastUpdated: string
 }
+
+// Generate a unique session ID when the component is first loaded
+// This will be used to identify transactions from the same form session
+const SESSION_ID = `session_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
 
 export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdded }: AddTransactionDialogProps) {
   const { toast } = useToast()
@@ -72,6 +78,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const [insufficientStock, setInsufficientStock] = useState(false)
   const [availableStock, setAvailableStock] = useState<number | null>(null)
   const formSubmitted = useRef(false)
+  const submissionInProgress = useRef(false)
+  const transactionCreated = useRef(false)
 
   // Basic transaction fields
   const [gasType, setGasType] = useState("")
@@ -105,6 +113,8 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     if (isOpen) {
       resetForm()
       formSubmitted.current = false
+      submissionInProgress.current = false
+      transactionCreated.current = false
     }
   }, [isOpen])
 
@@ -217,22 +227,57 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
   const handleClose = () => {
     // Reset the form submission ref to ensure we can submit again after reopening
     formSubmitted.current = false
+    submissionInProgress.current = false
+    transactionCreated.current = false
     // Reset the form data
     resetForm()
     // Close the dialog
     onClose()
   }
 
+  // Check for recent duplicate transactions
+  const checkForDuplicates = async (gasType: string, quantity: number): Promise<boolean> => {
+    try {
+      // Look for transactions with the same gas type and quantity in the last 60 seconds
+      const timeThreshold = Date.now() - 60000 // 60 seconds
+
+      const duplicateQuery = query(
+        collection(db, "transactions"),
+        where("gasType", "==", gasType),
+        where("kgs", "==", quantity),
+        where("clientTimestamp", ">=", timeThreshold),
+        orderBy("clientTimestamp", "desc"),
+        limit(5),
+      )
+
+      const querySnapshot = await getDocs(duplicateQuery)
+
+      // If we found any transactions that match these criteria, it's a potential duplicate
+      return querySnapshot.size > 0
+    } catch (error) {
+      console.error("Error checking for duplicate transactions:", error)
+      return false // If there's an error, allow the transaction to proceed
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    e.stopPropagation() // Prevent event bubbling
 
-    // Prevent duplicate submissions
-    if (formSubmitted.current || isSubmitting) {
-      console.log("Preventing duplicate submission")
+    // Multiple layers of protection against duplicate submissions
+    if (formSubmitted.current || submissionInProgress.current || transactionCreated.current || isSubmitting) {
+      console.log("Preventing duplicate submission", {
+        formSubmitted: formSubmitted.current,
+        submissionInProgress: submissionInProgress.current,
+        transactionCreated: transactionCreated.current,
+        isSubmitting,
+      })
       return
     }
 
+    // Set flags to prevent duplicate submissions
     formSubmitted.current = true
+    submissionInProgress.current = true
 
     if (!gasType || !quantity || !total) {
       toast({
@@ -241,8 +286,13 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         variant: "destructive",
       })
       formSubmitted.current = false
+      submissionInProgress.current = false
       return
     }
+
+    // Parse quantity once to ensure consistent values
+    const parsedQuantity = Number.parseFloat(quantity)
+    const parsedTotal = Number.parseFloat(total)
 
     // Check stock availability again before submitting
     if (!isRestock) {
@@ -254,17 +304,18 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           variant: "destructive",
         })
         formSubmitted.current = false
+        submissionInProgress.current = false
         return
       }
 
-      const requestedQuantity = Number.parseFloat(quantity)
-      if (requestedQuantity > stockItem.stock) {
+      if (parsedQuantity > stockItem.stock) {
         toast({
           title: "Insufficient stock",
           description: `Not enough ${gasType} in stock. Available: ${stockItem.stock.toFixed(2)} kgs`,
           variant: "destructive",
         })
         formSubmitted.current = false
+        submissionInProgress.current = false
         return
       }
     }
@@ -272,21 +323,40 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
     try {
       setIsSubmitting(true)
 
+      // Check for duplicate transactions
+      const hasDuplicates = await checkForDuplicates(gasType, parsedQuantity)
+
+      if (hasDuplicates) {
+        // Ask for confirmation before proceeding
+        const confirmContinue = window.confirm(
+          "A similar transaction was recently added. Are you sure you want to add another one?",
+        )
+
+        if (!confirmContinue) {
+          formSubmitted.current = false
+          submissionInProgress.current = false
+          setIsSubmitting(false)
+          return
+        }
+      }
+
       // Generate an idempotency key to prevent duplicate transactions
-      const idempotencyKey = `${Date.now()}-${gasType}-${quantity}-${Math.random().toString(36).substring(2, 9)}`
+      const idempotencyKey = `${Date.now()}-${gasType}-${parsedQuantity}-${Math.random().toString(36).substring(2, 9)}`
+      const clientTimestamp = Date.now()
 
       // Prepare transaction data for Firestore
       const firestoreData: FirestoreTransactionData = {
         gasType,
-        kgs: Number.parseFloat(quantity),
+        kgs: parsedQuantity,
         paymentMethod,
-        total: Number.parseFloat(total),
+        total: parsedTotal,
         currency,
         date: date.toISOString(),
         isRestock,
         priceType,
-        idempotencyKey, // Add idempotency key
-        clientTimestamp: Date.now(), // Add client timestamp for ordering
+        idempotencyKey,
+        clientTimestamp,
+        sessionId: SESSION_ID, // Add session ID
       }
 
       // Add optional fields if they exist
@@ -312,42 +382,14 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         }
       }
 
-      // Check for recent duplicate transactions
-      const recentTransactionsQuery = query(collection(db, "transactions"), orderBy("clientTimestamp", "desc"))
-
-      const recentSnapshot = await getDocs(recentTransactionsQuery)
-      const recentTransactions = recentSnapshot.docs.map((doc) => doc.data())
-
-      // Check for a potential duplicate in recent transactions (within last 30 seconds)
-      const potentialDuplicate = recentTransactions.find(
-        (t) =>
-          t.gasType === gasType &&
-          t.kgs === Number.parseFloat(quantity) &&
-          t.total === Number.parseFloat(total) &&
-          t.clientTimestamp > Date.now() - 30000, // Last 30 seconds
-      )
-
-      if (potentialDuplicate) {
-        console.warn("Potential duplicate transaction detected:", potentialDuplicate)
-        toast({
-          title: "Warning",
-          description: "A similar transaction was recently added. Please check before proceeding.",
-          variant: "destructive",
-        })
-
-        // Confirm with the user if they want to proceed
-        if (!window.confirm("A similar transaction was recently added. Are you sure you want to add another one?")) {
-          formSubmitted.current = false
-          setIsSubmitting(false)
-          return
-        }
-      }
-
       // Add to Firestore with serverTimestamp
       const docRef = await addDoc(collection(db, "transactions"), {
         ...firestoreData,
         createdAt: serverTimestamp(),
       })
+
+      // Mark that we've successfully created a transaction
+      transactionCreated.current = true
 
       // Create a Transaction object for the UI
       // Use the current date string for createdAt since serverTimestamp isn't available client-side
@@ -364,7 +406,7 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
           // Use the recordGasConsumption function from stock-service.ts
           const result = await recordGasConsumption(
             stockItem.id,
-            Number.parseFloat(quantity),
+            parsedQuantity,
             user.uid,
             user.displayName || user.email || "Unknown User",
             reason || "Sale",
@@ -402,13 +444,20 @@ export default function AddTransactionDialog({ isOpen, onClose, onTransactionAdd
         variant: "destructive",
       })
       formSubmitted.current = false
+      submissionInProgress.current = false
+      transactionCreated.current = false
     } finally {
       setIsSubmitting(false)
     }
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(open) => {
+        if (!open) handleClose()
+      }}
+    >
       <DialogContent className="sm:max-w-md md:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add New Transaction</DialogTitle>

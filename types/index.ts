@@ -45,6 +45,8 @@ export interface Transaction {
   // Duplicate prevention fields
   idempotencyKey?: string
   clientTimestamp?: number
+  sessionId?: string // Add session ID to track transactions from the same session
+  priceType?: "suggested" | "custom" // Track which price type was used
 }
 
 export interface Address {
