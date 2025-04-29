@@ -572,7 +572,7 @@ export default function SettingsPage() {
 
         for (const transaction of data.transactions) {
           // Create new transaction document with base fields
-          const newTransaction: Record<string, any> = {
+          const newTransaction: Record<string, string | number | boolean | Record<string, string> | undefined> = {
             userId: user.uid,
             gasType: transaction.gasType,
             kgs: Number(transaction.kgs),
