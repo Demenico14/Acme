@@ -1,15 +1,14 @@
+import { type NextRequest, NextResponse } from "next/server"
 import { adminDb } from "@/lib/firebase-admin"
 import { findDuplicateTransactions } from "@/lib/transaction-utils"
 import type { Transaction } from "@/types"
-import { doc, getDoc, getDocs, collection, query, orderBy, writeBatch } from "firebase/firestore"
-import { NextResponse } from "next/server"
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     // Get all transactions
-    const transactionsRef = collection(adminDb, "transactions")
-    const transactionsQuery = query(transactionsRef, orderBy("date", "asc"))
-    const querySnapshot = await getDocs(transactionsQuery)
+    const transactionsRef = adminDb.collection("transactions")
+    const transactionsQuery = transactionsRef.orderBy("date", "asc")
+    const querySnapshot = await transactionsQuery.get()
 
     const transactions = querySnapshot.docs.map((doc) => ({
       id: doc.id,
@@ -28,7 +27,7 @@ export async function POST() {
     }
 
     // For each group, keep the earliest transaction and delete the rest
-    const batch = writeBatch(adminDb)
+    const batch = adminDb.batch()
     let removedCount = 0
 
     for (const group of duplicateGroups) {
@@ -41,10 +40,10 @@ export async function POST() {
 
       for (const duplicate of duplicatesToRemove) {
         // Verify the transaction still exists before deleting
-        const docRef = doc(adminDb, "transactions", duplicate.id)
-        const docSnap = await getDoc(docRef)
+        const docRef = adminDb.collection("transactions").doc(duplicate.id)
+        const docSnap = await docRef.get()
 
-        if (docSnap.exists()) {
+        if (docSnap.exists) {
           batch.delete(docRef)
           removedCount++
         }
@@ -62,6 +61,13 @@ export async function POST() {
     })
   } catch (error) {
     console.error("Error deduplicating transactions:", error)
-    return NextResponse.json({ success: false, message: "Failed to deduplicate transactions" }, { status: 500 })
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Failed to deduplicate transactions",
+        error: String(error),
+      },
+      { status: 500 },
+    )
   }
 }

@@ -3,7 +3,6 @@
 import { adminDb } from "@/lib/firebase-admin"
 import { findDuplicateTransactions } from "@/lib/transaction-utils"
 import type { Transaction } from "@/types"
-import { collection, getDocs, query, orderBy, writeBatch, doc, getDoc } from "firebase/firestore"
 
 /**
  * Server action to detect and remove duplicate transactions
@@ -11,9 +10,9 @@ import { collection, getDocs, query, orderBy, writeBatch, doc, getDoc } from "fi
 export async function deduplicateTransactions() {
   try {
     // Get all transactions
-    const transactionsRef = collection(adminDb, "transactions")
-    const transactionsQuery = query(transactionsRef, orderBy("date", "asc"))
-    const querySnapshot = await getDocs(transactionsQuery)
+    const transactionsRef = adminDb.collection("transactions")
+    const transactionsQuery = transactionsRef.orderBy("date", "asc")
+    const querySnapshot = await transactionsQuery.get()
 
     const transactions = querySnapshot.docs.map((doc) => ({
       id: doc.id,
@@ -32,7 +31,7 @@ export async function deduplicateTransactions() {
     }
 
     // For each group, keep the earliest transaction and delete the rest
-    const batch = writeBatch(adminDb)
+    const batch = adminDb.batch()
     let removedCount = 0
 
     for (const group of duplicateGroups) {
@@ -45,10 +44,10 @@ export async function deduplicateTransactions() {
 
       for (const duplicate of duplicatesToRemove) {
         // Verify the transaction still exists before deleting
-        const docRef = doc(adminDb, "transactions", duplicate.id)
-        const docSnap = await getDoc(docRef)
+        const docRef = adminDb.collection("transactions").doc(duplicate.id)
+        const docSnap = await docRef.get()
 
-        if (docSnap.exists()) {
+        if (docSnap.exists) {
           batch.delete(docRef)
           removedCount++
         }
@@ -82,10 +81,10 @@ export async function validateTransaction(transaction: Partial<Transaction>) {
     // Get recent transactions from the last 2 minutes
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString()
 
-    const transactionsRef = collection(adminDb, "transactions")
-    const transactionsQuery = query(transactionsRef, orderBy("date", "desc"))
+    const transactionsRef = adminDb.collection("transactions")
+    const transactionsQuery = transactionsRef.orderBy("date", "desc")
+    const querySnapshot = await transactionsQuery.get()
 
-    const querySnapshot = await getDocs(transactionsQuery)
     const allTransactions = querySnapshot.docs.map((doc) => ({
       id: doc.id,
       ...doc.data(),
